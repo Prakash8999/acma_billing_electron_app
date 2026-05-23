@@ -1,14 +1,51 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
+import { Card, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
-import { Client, Invoice, InvoiceItem } from '../../types';
+import { Client, Invoice, InvoiceItem } from '../../../../shared/types';
 import { numberToWords } from '../../utils/numberToWords';
+import { useSystemSettings } from '../../context/SystemSettingsContext';
 import { Calculator, Save, Printer, Building2, FileText, Receipt, IndianRupee } from 'lucide-react';
 
+// Global default rate (Rs / M³) — same for all clients
+const GLOBAL_DEFAULT_RATE = 10;
+
+// Mock demo clients for testing
+const MOCK_CLIENTS: Client[] = [
+  {
+    id: 'client-1',
+    name: 'Alivira Animal Health Ltd.',
+    address: 'A-68, MIDC, Addl. Ambernath (E.), Dist. Thane - 421 506',
+    gstin: '27AABCA1234F1ZH',
+    state: 'Maharashtra',
+    stateCode: '27',
+    defaultRate: GLOBAL_DEFAULT_RATE,
+  },
+  {
+    id: 'client-2',
+    name: 'Godrej Consumer Products Ltd.',
+    address: 'Plot No. W-56, MIDC Industrial Area, Ambernath (West), Thane - 421 501',
+    gstin: '27AACCG5678K1ZP',
+    state: 'Maharashtra',
+    stateCode: '27',
+    defaultRate: GLOBAL_DEFAULT_RATE,
+  },
+  {
+    id: 'client-3',
+    name: 'Camlin Fine Sciences Ltd.',
+    address: 'Plot No. D-87, MIDC Chemical Zone, Ambernath (West), Dist. Thane - 421 501',
+    gstin: '27AABCC9012L1ZR',
+    state: 'Maharashtra',
+    stateCode: '27',
+    defaultRate: GLOBAL_DEFAULT_RATE,
+  },
+];
+
 export function CreateInvoice() {
-  const [clients, setClients] = useState<Client[]>([]);
+  const { settings } = useSystemSettings();
+
+  const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
 
   // Invoice Metadata
@@ -18,9 +55,9 @@ export function CreateInvoice() {
   // Billing Grid
   const [monthText, setMonthText] = useState<string>('');
   const [additionalDesc, setAdditionalDesc] = useState<string>('');
-  const [sacCode, setSacCode] = useState<string>('9994');
+  const [sacCode, setSacCode] = useState<string>(settings.defaultSacCode);
   const [waterConsumption, setWaterConsumption] = useState<number>(0);
-  const [rate, setRate] = useState<number>(0);
+  const [rate, setRate] = useState<number>(settings.defaultWaterRate);
   const [extraCharges, setExtraCharges] = useState<number>(0);
 
   // Other amounts
@@ -30,12 +67,23 @@ export function CreateInvoice() {
 
   useEffect(() => {
     loadClients();
-  }, []);
+    loadNextInvoiceNo();
+  }, [settings.financialYearPrefix]);
 
   const loadClients = async () => {
+    // Try IPC first, fall back to mock data
     if (window.billingAPI?.fetchClients) {
       const data = await window.billingAPI.fetchClients();
-      setClients(data || []);
+      setClients(data && data.length > 0 ? data : MOCK_CLIENTS);
+    }
+  };
+
+  const loadNextInvoiceNo = async () => {
+    if (window.billingAPI?.getNextInvoiceNo) {
+      const nextNo = await window.billingAPI.getNextInvoiceNo(settings.financialYearPrefix);
+      setInvoiceNo(nextNo.toString());
+    } else {
+      setInvoiceNo('1');
     }
   };
 
@@ -46,21 +94,29 @@ export function CreateInvoice() {
   // Auto-populate rate when client changes
   useEffect(() => {
     if (selectedClient) {
-      setRate(selectedClient.defaultRate || 0);
+      setRate(selectedClient.defaultRate || settings.defaultWaterRate);
     }
-  }, [selectedClient]);
+  }, [selectedClient, settings.defaultWaterRate]);
 
-  // Reactive Calculation Matrix
+  // Sync SAC code when settings change
+  useEffect(() => {
+    setSacCode(settings.defaultSacCode);
+  }, [settings.defaultSacCode]);
+
+  // Reactive Calculation Matrix — reads tax rates from context
+  const cgstRate = settings.cgstPercentage / 100;
+  const sgstRate = settings.sgstPercentage / 100;
+
   const calculations = useMemo(() => {
     const baseWaterCharge = (waterConsumption || 0) * (rate || 0);
     const amountBeforeTax = baseWaterCharge + (extraCharges || 0);
-    const cgstAmount = amountBeforeTax * 0.025; // 2.5%
-    const sgstAmount = amountBeforeTax * 0.025; // 2.5%
+    const cgstAmount = amountBeforeTax * cgstRate;
+    const sgstAmount = amountBeforeTax * sgstRate;
     const totalTaxAmount = cgstAmount + sgstAmount;
 
-    // Applying rounding here to simulate realistic billing
-    const amountAfterTax = Math.round(amountBeforeTax + totalTaxAmount);
-    const roundOff = amountAfterTax - (amountBeforeTax + totalTaxAmount);
+    // Do not round off, let the actual value be used
+    const amountAfterTax = amountBeforeTax + totalTaxAmount;
+    const roundOff = 0;
 
     return {
       baseWaterCharge,
@@ -71,16 +127,16 @@ export function CreateInvoice() {
       amountAfterTax,
       roundOff,
     };
-  }, [waterConsumption, rate, extraCharges]);
+  }, [waterConsumption, rate, extraCharges, cgstRate, sgstRate]);
 
   const amountInWords = useMemo(() => {
     return numberToWords(calculations.amountAfterTax);
   }, [calculations.amountAfterTax]);
 
-  const handleSave = async () => {
+  const getInvoicePayload = () => {
     if (!selectedClient) {
       alert('Please select a receiver.');
-      return;
+      return null;
     }
 
     const invoiceItem: InvoiceItem = {
@@ -96,7 +152,7 @@ export function CreateInvoice() {
 
     const invoiceData: Invoice = {
       id: crypto.randomUUID(),
-      invoiceNo: `2026-27/${invoiceNo}`,
+      invoiceNo: `${settings.financialYearPrefix}/${invoiceNo}`,
       date: invoiceDate,
       clientId: selectedClient.id,
       items: [invoiceItem],
@@ -117,17 +173,67 @@ export function CreateInvoice() {
       status: 'Unpaid',
     };
 
+    return invoiceData;
+  };
+
+  const handleSave = async () => {
+    const invoiceData = getInvoicePayload();
+    if (!invoiceData || !selectedClient) return;
+
     try {
       if (window.billingAPI?.saveInvoice) {
         const res = await window.billingAPI.saveInvoice(invoiceData);
         if (res.success) {
           alert('Invoice saved successfully');
+          loadNextInvoiceNo();
         }
       } else {
-        console.log('Mock Save Invoice:', invoiceData);
+        // Mock mode — no backend, show summary to user
+        alert(
+          `✅ Invoice Saved (Mock Mode)\n\n` +
+          `Invoice No: ${invoiceData.invoiceNo}\n` +
+          `Client: ${selectedClient.name}\n` +
+          `Date: ${invoiceData.date}\n` +
+          `Water: ${waterConsumption} M³ × ₹${rate}/M³\n` +
+          `Base Charge: ₹${calculations.baseWaterCharge.toFixed(2)}\n` +
+          `Extra Charges: ₹${extraCharges.toFixed(2)}\n` +
+          `Before Tax: ₹${calculations.amountBeforeTax.toFixed(2)}\n` +
+          `CGST (2.5%): ₹${calculations.cgstAmount.toFixed(2)}\n` +
+          `SGST (2.5%): ₹${calculations.sgstAmount.toFixed(2)}\n` +
+          `Total After Tax: ₹${calculations.amountAfterTax.toFixed(2)}\n\n` +
+          `Amount in Words: ${amountInWords}`
+        );
       }
     } catch (e) {
       console.error(e);
+      alert('Error saving invoice: ' + (e as Error).message);
+    }
+  };
+
+  const handlePrint = async () => {
+    const invoiceData = getInvoicePayload();
+    if (!invoiceData || !selectedClient) return;
+
+    if (window.billingAPI?.printDocument) {
+      const printData = {
+        invoiceData,
+        client: selectedClient,
+        settings: settings,
+        amountInWords
+      };
+      
+      try {
+        const res = await window.billingAPI.printDocument('invoice', printData) as any;
+        if (res.success) {
+          alert(`✅ Invoice PDF saved to Downloads folder!\nPath: ${res.filePath}`);
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Error generating PDF: ' + (e as Error).message);
+      }
+    } else {
+      // Fallback: use browser print dialog
+      window.print();
     }
   };
 
@@ -135,7 +241,7 @@ export function CreateInvoice() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1400px] mx-auto p-6 pb-10 space-y-5">
 
-        {/* ── Company Header ── compact banner */}
+        {/* ── Company Header ── compact banner (reads from settings) */}
         <div className="rounded-xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-6 py-4 shadow-lg">
           <div className="flex items-center justify-between">
             <div>
@@ -145,8 +251,8 @@ export function CreateInvoice() {
               </p>
             </div>
             <div className="text-right text-xs text-slate-300 space-y-0.5">
-              <div>Tel: (0251) 2610228 &nbsp;|&nbsp; Cell: 9049890397</div>
-              <div>acmacetp@gmail.com</div>
+              <div>Tel: {settings.officialPhone} &nbsp;|&nbsp; Cell: {settings.officialMobile}</div>
+              <div>{settings.officialEmail}</div>
               <div className="font-semibold text-white mt-1">GSTIN: 27AAAAA4636P1ZH &nbsp;|&nbsp; PAN: AAAAA4636P</div>
             </div>
           </div>
@@ -160,19 +266,19 @@ export function CreateInvoice() {
 
             {/* Invoice Metadata Row */}
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 pt-2">
                 <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-muted-foreground">
                   <FileText className="w-4 h-4" />
                   Invoice Details
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="relative mt-2">
-                    <div className="absolute inset-y-0 left-0 pl-3 pt-4 flex items-center pointer-events-none text-sm text-muted-foreground">
-                      2026-27/
+                    <div className="absolute inset-y-0 left-0 pl-3 pt-4 flex items-center pointer-events-none text-sm text-muted-foreground font-mono">
+                      {settings.financialYearPrefix}/
                     </div>
                     <input
                       type="text"
-                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[5.5rem] pr-3 py-1 pt-4 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[6.5rem] pr-3 py-1 pt-4 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={invoiceNo}
                       onChange={(e) => setInvoiceNo(e.target.value)}
                     />
@@ -192,7 +298,7 @@ export function CreateInvoice() {
 
             {/* Receiver Details */}
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 pt-2">
                 <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-muted-foreground">
                   <Building2 className="w-4 h-4" />
                   Receiver Details (Billed To)
@@ -232,7 +338,7 @@ export function CreateInvoice() {
 
             {/* Billing Itemized Grid */}
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 pt-2">
                 <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-muted-foreground">
                   <Receipt className="w-4 h-4" />
                   Billing Itemized Grid
@@ -293,7 +399,7 @@ export function CreateInvoice() {
 
             {/* Previous Outstanding & DPC */}
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-4 pt-2">
                 <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-muted-foreground">
                   <IndianRupee className="w-4 h-4" />
                   Outstanding & DPC
@@ -353,15 +459,15 @@ export function CreateInvoice() {
                     <span className="tabular-nums">₹ {calculations.amountBeforeTax.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Add: CGST @ 2.5%</span>
+                    <span>Add: CGST @ {settings.cgstPercentage}%</span>
                     <span className="tabular-nums">₹ {calculations.cgstAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Add: SGST @ 2.5%</span>
+                    <span>Add: SGST @ {settings.sgstPercentage}%</span>
                     <span className="tabular-nums">₹ {calculations.sgstAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Total Tax (GST @ 5%)</span>
+                    <span>Total Tax (GST @ {settings.cgstPercentage + settings.sgstPercentage}%)</span>
                     <span className="tabular-nums">₹ {calculations.totalTaxAmount.toFixed(2)}</span>
                   </div>
                   {calculations.roundOff !== 0 && (
@@ -390,7 +496,7 @@ export function CreateInvoice() {
                 <div className="p-4 bg-white/5 border-t border-white/10 flex gap-2">
                   <Button
                     variant="secondary"
-                    className="flex-1 gap-2 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                    className="w-1/2 gap-2 bg-emerald-600 hover:bg-emerald-700 text-black border-0"
                     onClick={handleSave}
                   >
                     <Save className="w-4 h-4" />
@@ -398,10 +504,11 @@ export function CreateInvoice() {
                   </Button>
                   <Button
                     variant="secondary"
-                    className="gap-2 bg-white/10 hover:bg-white/20 text-white border-0"
-                    onClick={() => window.billingAPI?.printDocument('invoice', {})}
+                    className="w-1/2 gap-2 bg-white/10 hover:bg-white/20 text-white border-0"
+                    onClick={handlePrint}
                     title="Print Invoice"
                   >
+                    Print Invoice
                     <Printer className="w-4 h-4" />
                   </Button>
                 </div>
@@ -414,8 +521,8 @@ export function CreateInvoice() {
                   <div className="text-muted-foreground space-y-0.5">
                     <div className="font-medium text-foreground">AMBARNATH JAI-HIND CO-OP. BANK LTD.</div>
                     <div>Branch: Main Branch, Ambarnath (West)</div>
-                    <div>Current A/c No.: <span className="font-mono">1002014004165</span></div>
-                    <div>IFSC: <span className="font-mono">AJHC0001002</span> &nbsp;|&nbsp; MICR: <span className="font-mono">400805002</span></div>
+                    <div>Current A/c No.: <span className="font-mono">{settings.bankAccountNo}</span></div>
+                    <div>IFSC: <span className="font-mono">{settings.bankIfscCode}</span> &nbsp;|&nbsp; MICR: <span className="font-mono">{settings.bankMicrCode}</span></div>
                   </div>
                 </CardContent>
               </Card>

@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../ui/Card
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
-import { Invoice, Receipt } from '../../types';
+import { Invoice, Receipt } from '../../../../shared/types';
 import { X, Printer, Save } from 'lucide-react';
 import { numberToWords } from '../../utils/numberToWords';
 

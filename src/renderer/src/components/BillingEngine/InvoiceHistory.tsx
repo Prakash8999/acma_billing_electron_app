@@ -1,57 +1,29 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { ReceiptModal } from './ReceiptModal';
-import { Invoice } from '../../types';
+import { Invoice } from '../../../../shared/types';
 import { FileText, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 
 export function InvoiceHistory() {
   const [selectedInvoiceForReceipt, setSelectedInvoiceForReceipt] = useState<{ invoice: Invoice, clientName: string } | null>(null);
 
-  // Mock data for display purposes since we don't have a fetchInvoices API in the prompt
-  // In a real scenario, this would be fetched from window.billingAPI.fetchInvoices()
-  const mockInvoices: (Invoice & { clientName: string })[] = [
-    {
-      id: '1',
-      invoiceNo: '2026-27/001',
-      date: '2026-03-15',
-      clientId: 'client-1',
-      clientName: 'Alivira Animal Health Ltd.',
-      items: [],
-      totals: {
-        baseCharge: 5000,
-        extraCharges: 0,
-        amountBeforeTax: 5000,
-        cgstAmount: 125,
-        sgstAmount: 125,
-        totalTaxAmount: 250,
-        amountAfterTax: 5250,
-        previousOutstanding: 0
-      },
-      dpc: { ifPaidAfterDate: '', pleasePayRs: 0 },
-      status: 'Unpaid'
-    },
-    {
-      id: '2',
-      invoiceNo: '2026-27/002',
-      date: '2026-03-10',
-      clientId: 'client-2',
-      clientName: 'Godrej Consumer Products Ltd.',
-      items: [],
-      totals: {
-        baseCharge: 8000,
-        extraCharges: 500,
-        amountBeforeTax: 8500,
-        cgstAmount: 212.5,
-        sgstAmount: 212.5,
-        totalTaxAmount: 425,
-        amountAfterTax: 8925,
-        previousOutstanding: 0
-      },
-      dpc: { ifPaidAfterDate: '', pleasePayRs: 0 },
-      status: 'Fully Paid'
+  const [invoices, setInvoices] = useState<(Invoice & { clientName: string })[]>([]);
+
+  useEffect(() => {
+    loadInvoices();
+  }, []);
+
+  const loadInvoices = async () => {
+    try {
+      if (window.billingAPI?.fetchInvoices) {
+        const data = await window.billingAPI.fetchInvoices();
+        setInvoices(data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch invoices:', error);
     }
-  ];
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -87,7 +59,7 @@ export function InvoiceHistory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {mockInvoices.map((invoice) => (
+                {invoices.map((invoice) => (
                   <tr key={invoice.id} className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-4 font-medium whitespace-nowrap">{invoice.invoiceNo}</td>
                     <td className="px-6 py-4 whitespace-nowrap">{invoice.date}</td>

@@ -6,6 +6,7 @@ export interface Client {
   state: string;
   stateCode: string;
   defaultRate: number;
+  isActive?: boolean;
 }
 
 export interface InvoiceItem {
@@ -54,14 +55,40 @@ export interface Receipt {
   instrumentDate?: string;
 }
 
+export interface SystemSettings {
+  // Section 1: Tax Slabs & Classification
+  defaultSacCode: string;
+  cgstPercentage: number;
+  sgstPercentage: number;
+
+  // Section 2: Active Billing Period
+  financialYearPrefix: string;
+
+  // Section 3: Society Profile & Bank Identity
+  officialPhone: string;
+  officialMobile: string;
+  officialEmail: string;
+  bankAccountNo: string;
+  bankIfscCode: string;
+  bankMicrCode: string;
+
+  // Global rate
+  defaultWaterRate: number;
+}
+
 declare global {
   interface Window {
     billingAPI: {
       fetchClients: () => Promise<Client[]>;
       saveClient: (clientData: Client) => Promise<{ success: boolean; data: Client }>;
+      toggleClientStatus: (clientId: string, isActive: boolean) => Promise<{ success: boolean }>;
+      fetchInvoices: () => Promise<(Invoice & { clientName: string })[]>;
       saveInvoice: (invoiceData: Invoice) => Promise<{ success: boolean; data: Invoice }>;
       saveReceipt: (receiptData: Receipt) => Promise<{ success: boolean; data: Receipt }>;
       printDocument: (documentType: 'invoice' | 'receipt' | 'both', data: any) => Promise<boolean>;
+      getSystemSettings: () => Promise<SystemSettings>;
+      updateSystemSettings: (settings: SystemSettings) => Promise<{ success: boolean }>;
+      getNextInvoiceNo: (prefix: string) => Promise<number>;
     };
   }
 }

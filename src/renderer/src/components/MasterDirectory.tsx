@@ -2,18 +2,32 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Input } from './ui/Input';
 import { Button } from './ui/Button';
-import { Client } from '../types';
-import { UserPlus, Save, Edit, Settings, Droplets } from 'lucide-react';
+import { Client } from '../../../shared/types';
+import { useSystemSettings } from '../context/SystemSettingsContext';
+import {
+  UserPlus, Save, Edit, Droplets, Settings, Landmark, Phone,
+  Percent, Calendar, Archive, ArchiveRestore
+} from 'lucide-react';
 
 export function MasterDirectory() {
+  const { settings, updateSettings } = useSystemSettings();
+
   const [clients, setClients] = useState<Client[]>([]);
   const [formData, setFormData] = useState<Partial<Client>>({
     state: 'Maharashtra',
     stateCode: '27',
   });
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<'Active' | 'Inactive' | 'All'>('Active');
 
-  // Global rate — separate from per-client data
-  const [globalRate, setGlobalRate] = useState<number>(0);
+  // ── Local copy of settings for the form (edit-then-save pattern) ──
+  const [localSettings, setLocalSettings] = useState(settings);
+  useEffect(() => {
+    setLocalSettings(settings);
+  }, [settings]);
+
+  // ── Sub-tab navigation ──
+  const [activePanel, setActivePanel] = useState<'clients' | 'config'>('clients');
 
   useEffect(() => {
     loadClients();
@@ -32,36 +46,47 @@ export function MasterDirectory() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      if (window.billingAPI?.saveClient) {
-        // Validate GSTIN
-        if (formData.gstin && formData.gstin.length !== 15) {
-          alert('GSTIN must be exactly 15 characters.');
-          return;
-        }
+      if (formData.gstin && formData.gstin.length !== 15) {
+        alert('GSTIN must be exactly 15 characters.');
+        return;
+      }
 
-        const newClient: Client = {
-          id: formData.id || crypto.randomUUID(),
-          name: formData.name || '',
-          address: formData.address || '',
-          gstin: formData.gstin || '',
-          state: formData.state || 'Maharashtra',
-          stateCode: formData.stateCode || '27',
-          defaultRate: globalRate,
-        };
+      const newClient: Client = {
+        id: formData.id || crypto.randomUUID(),
+        name: formData.name || '',
+        address: formData.address || '',
+        gstin: formData.gstin || '',
+        state: formData.state || 'Maharashtra',
+        stateCode: formData.stateCode || '27',
+        defaultRate: localSettings.defaultWaterRate,
+        isActive: formData.isActive !== undefined ? formData.isActive : true,
+      };
+
+      if (window.billingAPI?.saveClient) {
         const result = await window.billingAPI.saveClient(newClient);
         if (result.success) {
           setFormData({ state: 'Maharashtra', stateCode: '27' });
           loadClients();
         }
+      } else {
+        // Mock mode
+        setClients((prev) => {
+          const exists = prev.findIndex((c) => c.id === newClient.id);
+          if (exists >= 0) {
+            const updated = [...prev];
+            updated[exists] = newClient;
+            return updated;
+          }
+          return [...prev, newClient];
+        });
+        setFormData({ state: 'Maharashtra', stateCode: '27' });
+        alert('✅ Client saved (Mock Mode)');
       }
     } catch (error) {
       console.error('Failed to save client:', error);
@@ -72,186 +97,445 @@ export function MasterDirectory() {
     setFormData(client);
   };
 
+  const handleToggleStatus = async (client: Client) => {
+    try {
+      const newStatus = !client.isActive;
+      if (window.billingAPI?.toggleClientStatus) {
+        await window.billingAPI.toggleClientStatus(client.id, newStatus);
+        loadClients();
+      } else {
+        setClients(clients.map(c => c.id === client.id ? { ...c, isActive: newStatus } : c));
+      }
+    } catch (error) {
+      console.error('Failed to toggle client status:', error);
+    }
+  };
+
+  // ── Settings form handlers ──
+  const handleSettingsChange = (field: string, value: string | number) => {
+    setLocalSettings((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleToggleEditSettings = async () => {
+    if (isEditingSettings) {
+      await updateSettings(localSettings);
+      alert('✅ Global settings updated successfully');
+      setIsEditingSettings(false);
+    } else {
+      setIsEditingSettings(true);
+    }
+  };
+
+  const totalGst = (localSettings.cgstPercentage || 0) + (localSettings.sgstPercentage || 0);
+
+  const filteredClients = clients.filter(c => {
+    if (filterStatus === 'Active') return c.isActive;
+    if (filterStatus === 'Inactive') return !c.isActive;
+    return true;
+  });
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1400px] mx-auto p-6 space-y-5">
 
-        {/* ── Global Rate Setting ── */}
-        <div className="rounded-xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-6 py-4 shadow-lg">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                <Droplets className="w-5 h-5 text-emerald-400" />
-              </div>
-              <div>
-                <div className="text-sm font-semibold">Default Water Consumption Rate</div>
-                <div className="text-xs text-slate-400">Applied universally to all clients during invoice generation</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-white/10 rounded-lg px-4 py-2">
-                <span className="text-slate-400 text-sm">₹</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="bg-transparent text-white text-lg font-bold w-24 outline-none text-right tabular-nums placeholder:text-slate-500"
-                  value={globalRate || ''}
-                  onChange={(e) => setGlobalRate(parseFloat(e.target.value) || 0)}
-                  placeholder="0.00"
-                />
-                <span className="text-slate-400 text-sm">/ M³</span>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 gap-1.5"
-                onClick={() => {
-                  // Save global rate — in real app this would go through IPC
-                  console.log('Global rate saved:', globalRate);
-                }}
-              >
-                <Save className="w-3.5 h-3.5" />
-                Save Rate
-              </Button>
-            </div>
-          </div>
+        {/* ── Top Banner with Rate + Sub-tab Toggle ── */}
+        
+
+        {/* ── Sub-Tab Navigation ── */}
+        <div className="flex gap-2">
+          <Button
+            variant={activePanel === 'clients' ? 'primary' : 'ghost'}
+            size="sm"
+            className="gap-2"
+            onClick={() => setActivePanel('clients')}
+          >
+            <UserPlus className="w-4 h-4" />
+            Client Directory
+          </Button>
+          <Button
+            variant={activePanel === 'config' ? 'primary' : 'ghost'}
+            size="sm"
+            className="gap-2"
+            onClick={() => setActivePanel('config')}
+          >
+            <Settings className="w-4 h-4" />
+            System & Society Configurations
+          </Button>
         </div>
 
-        {/* ── Main Grid ── */}
-        <div className="grid grid-cols-12 gap-5">
+        {/* ═══════════════════════════════════════════ */}
+        {/* ══ PANEL 1: CLIENT DIRECTORY             ══ */}
+        {/* ═══════════════════════════════════════════ */}
+        {activePanel === 'clients' && (
+          <div className="grid grid-cols-12 gap-5">
 
-          {/* Client Form (4 cols) */}
-          <div className="col-span-4">
-            <Card className="sticky top-0">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <UserPlus className="w-4 h-4 text-primary" />
-                  {formData.id ? 'Edit Client' : 'Add New Client'}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleSave} className="flex flex-col gap-3">
-                  <Input
-                    label="Client Name"
-                    name="name"
-                    value={formData.name || ''}
-                    onChange={handleInputChange}
-                    required
-                  />
-
-                  <div className="relative mt-2">
-                    <textarea
-                      name="address"
-                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 pt-5 text-sm shadow-sm placeholder:text-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[80px] resize-none"
-                      placeholder="Factory/Billing Address"
-                      value={formData.address || ''}
+            {/* Client Form (4 cols) */}
+            <div className="col-span-4">
+              <Card className="sticky top-0">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <UserPlus className="w-4 h-4 text-primary" />
+                    {formData.id ? 'Edit Client' : 'Add New Client'}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSave} className="flex flex-col gap-3">
+                    <Input
+                      label="Client Name"
+                      name="name"
+                      value={formData.name || ''}
                       onChange={handleInputChange}
                       required
                     />
-                    <label className="absolute left-3 top-1 text-xs text-muted-foreground pointer-events-none transition-all duration-200">
-                      Factory/Billing Address
-                    </label>
-                  </div>
 
-                  <Input
-                    label="GSTIN No. (15 chars)"
-                    name="gstin"
-                    value={formData.gstin || ''}
-                    onChange={handleInputChange}
-                    maxLength={15}
-                    required
-                  />
+                    <div className="relative mt-2">
+                      <textarea
+                        name="address"
+                        className="flex w-full rounded-md border border-input bg-transparent px-4 py-2 pt-5 text-sm shadow-sm placeholder:text-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[80px] resize-none"
+                        placeholder="Factory/Billing Address"
+                        value={formData.address || ''}
+                        onChange={handleInputChange}
+                        required
+                      />
+                      <label className="absolute left-4 top-1 text-[10px] text-muted-foreground pointer-events-none transition-all duration-200">
+                        Factory/Billing Address
+                      </label>
+                    </div>
 
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="col-span-2">
+                    <Input
+                      label="GSTIN No. (15 chars)"
+                      name="gstin"
+                      value={formData.gstin || ''}
+                      onChange={handleInputChange}
+                      maxLength={15}
+                      required
+                    />
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="col-span-2">
+                        <Input
+                          label="State"
+                          name="state"
+                          value={formData.state || ''}
+                          onChange={handleInputChange}
+                          required
+                        />
+                      </div>
                       <Input
-                        label="State"
-                        name="state"
-                        value={formData.state || ''}
+                        label="State Code"
+                        name="stateCode"
+                        value={formData.stateCode || ''}
                         onChange={handleInputChange}
                         required
                       />
                     </div>
-                    <Input
-                      label="State Code"
-                      name="stateCode"
-                      value={formData.stateCode || ''}
-                      onChange={handleInputChange}
-                      required
-                    />
+
+                    <Button type="submit" className="mt-2 gap-2 w-full">
+                      <Save className="w-4 h-4" />
+                      {formData.id ? 'Update Client' : 'Save Client'}
+                    </Button>
+
+                    {formData.id && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground"
+                        onClick={() => setFormData({ state: 'Maharashtra', stateCode: '27' })}
+                      >
+                        Cancel editing
+                      </Button>
+                    )}
+                  </form>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Client Table (8 cols) */}
+            <div className="col-span-8">
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-row items-center justify-between w-full">
+                    <CardTitle className="text-sm">Master Directory</CardTitle>
+                    <select
+                      className="text-xs bg-muted border border-border rounded-md px-2 py-1 outline-none w-fit"
+                      value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value as any)}
+                    >
+                      <option value="Active">Active Clients</option>
+                      <option value="Inactive">Inactive Clients</option>
+                      <option value="All">All Clients</option>
+                    </select>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-auto max-h-[calc(100vh-280px)]">
+                    <table className="w-full text-sm text-left">
+                      <thead className="text-xs text-muted-foreground uppercase bg-muted/50 sticky top-0 backdrop-blur-md">
+                        <tr>
+                          <th className="px-5 py-3 font-medium">Name</th>
+                          <th className="px-5 py-3 font-medium">Address</th>
+                          <th className="px-5 py-3 font-medium">GSTIN No.</th>
+                          <th className="px-5 py-3 font-medium">State</th>
+                          <th className="px-5 py-3 font-medium text-center w-20">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {filteredClients.map((client) => (
+                          <tr
+                            key={client.id}
+                            className={`hover:bg-muted/30 transition-colors ${!client.isActive ? 'opacity-50' : ''}`}
+                          >
+                            <td className="px-5 py-3 font-medium whitespace-nowrap">
+                              {client.name} {!client.isActive && <span className="ml-2 text-[10px] font-bold uppercase tracking-wider text-red-500 border border-red-500/30 px-1.5 py-0.5 rounded">Inactive</span>}
+                            </td>
+                            <td
+                              className="px-5 py-3 text-muted-foreground max-w-[200px] truncate"
+                              title={client.address}
+                            >
+                              {client.address}
+                            </td>
+                            <td className="px-5 py-3 font-mono text-xs">{client.gstin}</td>
+                            <td className="px-5 py-3 whitespace-nowrap">
+                              {client.state}{' '}
+                              <span className="text-muted-foreground">({client.stateCode})</span>
+                            </td>
+                            <td className="px-5 py-3 text-center whitespace-nowrap">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEdit(client)}
+                                title="Edit"
+                              >
+                                <Edit className="w-4 h-4 text-primary" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleToggleStatus(client)}
+                                title={client.isActive ? "Deactivate Client" : "Restore Client"}
+                              >
+                                {client.isActive ? <Archive className="w-4 h-4 text-red-500" /> : <ArchiveRestore className="w-4 h-4 text-emerald-500" />}
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredClients.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={5}
+                              className="px-5 py-12 text-center text-muted-foreground"
+                            >
+                              No clients found. Add a client to get started.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════ */}
+        {/* ══ PANEL 2: SYSTEM & SOCIETY CONFIGS      ══ */}
+        {/* ═══════════════════════════════════════════ */}
+        {activePanel === 'config' && (
+          <div className="grid grid-cols-12 gap-5">
+
+            {/* ── Section 1: Tax Slabs & Classification ── */}
+            <div className="col-span-4">
+              
+
+
+
+
+
+              <Card className="mb-5">
+                <CardContent className="p-5 pt-4">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-muted-foreground">
+                    <Droplets className="w-4 h-4" />
+                    Water Consumption Configuration
                   </div>
 
-                  <Button type="submit" className="mt-2 gap-2 w-full">
-                    <Save className="w-4 h-4" />
-                    {formData.id ? 'Update Client' : 'Save Client'}
-                  </Button>
+                  <div className="space-y-3">
+                    <Input
+                      label="Default Water Rate (₹ / M³)"
+                      type="number"
+                      step="0.01"
+                      className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      value={localSettings.defaultWaterRate ?? ''}
+                      onChange={(e) =>
+                        handleSettingsChange('defaultWaterRate', parseFloat(e.target.value) || 0)
+                      }
+                      disabled={!isEditingSettings}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
 
-                  {formData.id && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground"
-                      onClick={() => setFormData({ state: 'Maharashtra', stateCode: '27' })}
-                    >
-                      Cancel editing
-                    </Button>
-                  )}
-                </form>
-              </CardContent>
-            </Card>
-          </div>
 
-          {/* Client Table (8 cols) */}
-          <div className="col-span-8">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Master Directory</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-auto max-h-[calc(100vh-280px)]">
-                  <table className="w-full text-sm text-left">
-                    <thead className="text-xs text-muted-foreground uppercase bg-muted/50 sticky top-0 backdrop-blur-md">
-                      <tr>
-                        <th className="px-5 py-3 font-medium">Name</th>
-                        <th className="px-5 py-3 font-medium">Address</th>
-                        <th className="px-5 py-3 font-medium">GSTIN No.</th>
-                        <th className="px-5 py-3 font-medium">State</th>
-                        <th className="px-5 py-3 font-medium text-center w-20">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {clients.map((client) => (
-                        <tr key={client.id} className="hover:bg-muted/30 transition-colors">
-                          <td className="px-5 py-3 font-medium whitespace-nowrap">{client.name}</td>
-                          <td className="px-5 py-3 text-muted-foreground max-w-[200px] truncate" title={client.address}>
-                            {client.address}
-                          </td>
-                          <td className="px-5 py-3 font-mono text-xs">{client.gstin}</td>
-                          <td className="px-5 py-3 whitespace-nowrap">
-                            {client.state} <span className="text-muted-foreground">({client.stateCode})</span>
-                          </td>
-                          <td className="px-5 py-3 text-center">
-                            <Button variant="ghost" size="sm" onClick={() => handleEdit(client)} title="Edit">
-                              <Edit className="w-4 h-4 text-primary" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                      {clients.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="px-5 py-12 text-center text-muted-foreground">
-                            No clients found. Add a client to get started.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+
+
+
+
+
+
+
+              
+              <Card>
+                <CardContent className="p-5 pt-4">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-muted-foreground">
+                    <Percent className="w-4 h-4" />
+                    Tax Slabs & Classification
+                  </div>
+
+                  <div className="space-y-3">
+                    <Input
+                      label="Default SAC Code"
+                      value={localSettings.defaultSacCode}
+                      onChange={(e) => handleSettingsChange('defaultSacCode', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="CGST Percentage (%)"
+                      type="number"
+                      step="0.1"
+                      value={localSettings.cgstPercentage ?? ''}
+                      onChange={(e) =>
+                        handleSettingsChange('cgstPercentage', parseFloat(e.target.value) || 0)
+                      }
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="SGST Percentage (%)"
+                      type="number"
+                      step="0.1"
+                      value={localSettings.sgstPercentage ?? ''}
+                      onChange={(e) =>
+                        handleSettingsChange('sgstPercentage', parseFloat(e.target.value) || 0)
+                      }
+                      disabled={!isEditingSettings}
+                    />
+
+                    {/* Read-only GST badge */}
+                    <div className="mt-3 flex items-center gap-2">
+                      <div className="px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold dark:bg-emerald-900/30 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                        Total GST: {totalGst.toFixed(1)}%
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* ── Section 2: Active Billing Period ── */}
+            <div className="col-span-4">
+              <Card>
+                <CardContent className="p-5 pt-4">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-muted-foreground">
+                    <Calendar className="w-4 h-4" />
+                    Active Billing Period
+                  </div>
+
+                  <div className="space-y-3">
+                    <Input
+                      label="Financial Year Prefix"
+                      value={localSettings.financialYearPrefix}
+                      onChange={(e) =>
+                        handleSettingsChange('financialYearPrefix', e.target.value)
+                      }
+                      disabled={!isEditingSettings}
+                    />
+                    <div className="text-xs text-muted-foreground mt-2 p-3 bg-muted/30 rounded-md border border-muted">
+                      <span className="font-medium text-foreground">Preview:</span> Invoice No. will appear as{' '}
+                      <span className="font-mono font-semibold text-foreground">
+                        {localSettings.financialYearPrefix}001
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="mt-5">
+                <Button
+                  className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                  onClick={handleToggleEditSettings}
+                >
+                  {isEditingSettings ? <Save className="w-4 h-4" /> : <Edit className="w-4 h-4" />}
+                  {isEditingSettings ? 'Save Global Settings' : 'Edit Global Settings'}
+                </Button>
+              </div>
+
+            </div>
+
+            {/* ── Section 3: Society Profile & Bank Identity ── */}
+            <div className="col-span-4 space-y-5">
+              <Card>
+                <CardContent className="p-5 pt-4">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-muted-foreground">
+                    <Phone className="w-4 h-4" />
+                    Society Contact Info
+                  </div>
+
+                  <div className="space-y-3">
+                    <Input
+                      label="Official Phone Line"
+                      value={localSettings.officialPhone}
+                      onChange={(e) => handleSettingsChange('officialPhone', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="Official Mobile Line"
+                      value={localSettings.officialMobile}
+                      onChange={(e) => handleSettingsChange('officialMobile', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="Official Email"
+                      type="email"
+                      value={localSettings.officialEmail}
+                      onChange={(e) => handleSettingsChange('officialEmail', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-5 pt-4">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-muted-foreground">
+                    <Landmark className="w-4 h-4" />
+                    Bank Identity
+                  </div>
+
+                  <div className="space-y-3">
+                    <Input
+                      label="Bank Account Number"
+                      value={localSettings.bankAccountNo}
+                      onChange={(e) => handleSettingsChange('bankAccountNo', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="Bank IFSC Code"
+                      value={localSettings.bankIfscCode}
+                      onChange={(e) => handleSettingsChange('bankIfscCode', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                    <Input
+                      label="Bank MICR Code"
+                      value={localSettings.bankMicrCode}
+                      onChange={(e) => handleSettingsChange('bankMicrCode', e.target.value)}
+                      disabled={!isEditingSettings}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
