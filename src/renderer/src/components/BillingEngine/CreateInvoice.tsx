@@ -278,7 +278,7 @@ export function CreateInvoice() {
                     </div>
                     <input
                       type="text"
-                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[6.5rem] pr-3 py-1 pt-4 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[4.7rem] pr-3 py-1 pt-5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={invoiceNo}
                       onChange={(e) => setInvoiceNo(e.target.value)}
                     />
@@ -356,7 +356,7 @@ export function CreateInvoice() {
                   <Input
                     label="SAC Code"
                     value={sacCode}
-                    onChange={(e) => setSacCode(e.target.value)}
+                    disabled
                   />
                 </div>
 
@@ -384,6 +384,7 @@ export function CreateInvoice() {
                     step="0.01"
                     label="Rate (Rs / M³)"
                     value={rate || ''}
+                    disabled
                     onChange={(e) => setRate(parseFloat(e.target.value) || 0)}
                   />
                   <Input

@@ -1,7 +1,7 @@
 import { app, ipcMain, BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateInvoiceHTML } from './pdfTemplate';
+import { generateInvoiceHTML, generateReceiptHTML } from './pdfTemplate';
 import * as db from './database';
 import { validateClient, validateSystemSettings, validateInvoice, validateReceipt } from './validation';
 
@@ -91,6 +91,28 @@ export const registerIpcHandlers = () => {
         htmlContent = generateInvoiceHTML(data);
         const safeInvoiceNo = data.invoiceData.invoiceNo.replace(/[^a-zA-Z0-9_-]/g, '_');
         fileName = `Invoice_${safeInvoiceNo}_${Date.now()}.pdf`;
+      } else if (documentType === 'receipt') {
+        htmlContent = generateReceiptHTML(data);
+        const safeReceiptNo = data.receiptData.receiptNo.replace(/[^a-zA-Z0-9_-]/g, '_');
+        fileName = `Receipt_${safeReceiptNo}_${Date.now()}.pdf`;
+      } else if (documentType === 'both') {
+        const invoiceHtml = generateInvoiceHTML(data);
+        const receiptHtml = generateReceiptHTML(data);
+        // Inject receipt content right before the end of invoiceHtml body with a page break
+        const cleanReceiptHtml = receiptHtml
+          .replace('<!DOCTYPE html>', '')
+          .replace(/<html[^>]*>/, '')
+          .replace(/<head[^>]*>[\s\S]*?<\/head>/, '')
+          .replace(/<body[^>]*>/, '')
+          .replace('</body>', '')
+          .replace('</html>', '');
+        
+        htmlContent = invoiceHtml.replace(
+          '</body>',
+          '<div style="page-break-before: always;"></div>' + cleanReceiptHtml + '</body>'
+        );
+        const safeInvoiceNo = data.invoiceData.invoiceNo.replace(/[^a-zA-Z0-9_-]/g, '_');
+        fileName = `Composite_${safeInvoiceNo}_${Date.now()}.pdf`;
       } else {
         throw new Error('Unsupported document type');
       }

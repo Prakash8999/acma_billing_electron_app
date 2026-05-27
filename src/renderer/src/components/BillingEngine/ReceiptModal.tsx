@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -6,6 +6,7 @@ import { Button } from '../ui/Button';
 import { Invoice, Receipt } from '../../../../shared/types';
 import { X, Printer, Save } from 'lucide-react';
 import { numberToWords } from '../../utils/numberToWords';
+import { useSystemSettings } from '../../context/SystemSettingsContext';
 
 interface ReceiptModalProps {
   invoice: Invoice;
@@ -14,6 +15,10 @@ interface ReceiptModalProps {
 }
 
 export function ReceiptModal({ invoice, clientName, onClose }: ReceiptModalProps) {
+  const { settings } = useSystemSettings();
+  const [clients, setClients] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const [receiptNo, setReceiptNo] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Cheque' | 'Draft'>('Cash');
@@ -23,10 +28,29 @@ export function ReceiptModal({ invoice, clientName, onClose }: ReceiptModalProps
   const [refNumber, setRefNumber] = useState('');
   const [instrumentDate, setInstrumentDate] = useState('');
 
+  useEffect(() => {
+    const loadClients = async () => {
+      if (window.billingAPI?.fetchClients) {
+        const data = await window.billingAPI.fetchClients();
+        setClients(data || []);
+      }
+      setLoading(false);
+    };
+    loadClients();
+  }, []);
+
+  const client = clients.find((c) => c.id === invoice.clientId) || {
+    name: clientName,
+    address: '',
+    gstin: '',
+    state: 'Maharashtra',
+    stateCode: '27'
+  };
+
   const handleSave = async () => {
     const receiptData: Receipt = {
       id: crypto.randomUUID(),
-      receiptNo: `2026-27/${receiptNo}`,
+      receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
       date,
       invoiceId: invoice.id,
       paymentMethod,
@@ -78,12 +102,12 @@ export function ReceiptModal({ invoice, clientName, onClose }: ReceiptModalProps
 
           <div className="grid grid-cols-2 gap-4">
             <div className="relative mt-2">
-              <div className="absolute inset-y-0 left-0 pl-3 pt-4 flex items-center pointer-events-none text-sm text-muted-foreground">
-                2026-27/
+              <div className="absolute inset-y-0 left-0 pl-3 pt-4 flex items-center pointer-events-none text-sm text-muted-foreground font-mono">
+                {settings.financialYearPrefix}/
               </div>
               <input
                 type="text"
-                className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[5.5rem] pr-3 py-1 pt-4 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[6.5rem] pr-3 py-1 pt-4 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={receiptNo}
                 onChange={(e) => setReceiptNo(e.target.value)}
               />
@@ -154,13 +178,91 @@ export function ReceiptModal({ invoice, clientName, onClose }: ReceiptModalProps
         </CardContent>
         <CardFooter className="border-t bg-muted/30 gap-2 justify-between">
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => window.billingAPI?.printDocument('invoice', {})}>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={async () => {
+                const printData = {
+                  invoiceData: invoice,
+                  client: client,
+                  settings: settings,
+                  amountInWords: numberToWords(invoice.totals.amountAfterTax)
+                };
+                try {
+                  const res = await window.billingAPI?.printDocument('invoice', printData) as any;
+                  if (res?.success) alert(`✅ Invoice PDF saved!\nPath: ${res.filePath}`);
+                } catch (e: any) {
+                  alert('Error: ' + e.message);
+                }
+              }}
+              disabled={loading}
+            >
               <Printer className="w-4 h-4 mr-2" /> Print Invoice
             </Button>
-            <Button variant="outline" size="sm" onClick={() => window.billingAPI?.printDocument('receipt', {})}>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={async () => {
+                const receiptData = {
+                  id: crypto.randomUUID(),
+                  receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
+                  date,
+                  invoiceId: invoice.id,
+                  paymentMethod,
+                  allocation,
+                  amountReceived,
+                  refNumber: paymentMethod !== 'Cash' ? refNumber : undefined,
+                  instrumentDate: paymentMethod !== 'Cash' ? instrumentDate : undefined,
+                };
+                const printData = {
+                  receiptData,
+                  invoiceData: invoice,
+                  client: client,
+                  settings: settings,
+                  amountInWords: numberToWords(amountReceived)
+                };
+                try {
+                  const res = await window.billingAPI?.printDocument('receipt', printData) as any;
+                  if (res?.success) alert(`✅ Receipt PDF saved!\nPath: ${res.filePath}`);
+                } catch (e: any) {
+                  alert('Error: ' + e.message);
+                }
+              }}
+              disabled={loading}
+            >
               <Printer className="w-4 h-4 mr-2" /> Print Receipt
             </Button>
-            <Button variant="outline" size="sm" onClick={() => window.billingAPI?.printDocument('both', {})}>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={async () => {
+                const receiptData = {
+                  id: crypto.randomUUID(),
+                  receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
+                  date,
+                  invoiceId: invoice.id,
+                  paymentMethod,
+                  allocation,
+                  amountReceived,
+                  refNumber: paymentMethod !== 'Cash' ? refNumber : undefined,
+                  instrumentDate: paymentMethod !== 'Cash' ? instrumentDate : undefined,
+                };
+                const printData = {
+                  receiptData,
+                  invoiceData: invoice,
+                  client: client,
+                  settings: settings,
+                  amountInWords: numberToWords(amountReceived)
+                };
+                try {
+                  const res = await window.billingAPI?.printDocument('both', printData) as any;
+                  if (res?.success) alert(`✅ Composite PDF saved!\nPath: ${res.filePath}`);
+                } catch (e: any) {
+                  alert('Error: ' + e.message);
+                }
+              }}
+              disabled={loading}
+            >
               <Printer className="w-4 h-4 mr-2" /> Print Composite
             </Button>
           </div>
