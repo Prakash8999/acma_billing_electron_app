@@ -15,7 +15,8 @@ const api = {
   printDocument: (documentType: string, data: any) => ipcRenderer.invoke('printDocument', documentType, data),
   getSystemSettings: () => ipcRenderer.invoke('getSystemSettings'),
   updateSystemSettings: (settings: SystemSettings) => ipcRenderer.invoke('updateSystemSettings', settings),
-  getNextInvoiceNo: (prefix: string) => ipcRenderer.invoke('getNextInvoiceNo', prefix)
+  getNextInvoiceNo: (prefix: string) => ipcRenderer.invoke('getNextInvoiceNo', prefix),
+  getNextReceiptNo: (prefix: string) => ipcRenderer.invoke('getNextReceiptNo', prefix)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

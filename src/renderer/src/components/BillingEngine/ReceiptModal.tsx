@@ -24,36 +24,74 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
   const [isEditing, setIsEditing] = useState(!initialReceipt);
   const [savedReceiptId, setSavedReceiptId] = useState<string | null>(initialReceipt?.id || null);
 
-  const [receiptNo, setReceiptNo] = useState(initialReceipt ? initialReceipt.receiptNo.split('/').pop() || '' : '');
-  const [date, setDate] = useState(initialReceipt?.date || new Date().toISOString().split('T')[0]);
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Cheque' | 'Draft'>(initialReceipt?.paymentMethod || 'Cash');
-  const [allocation, setAllocation] = useState<'Full' | 'Part'>(initialReceipt?.allocation || 'Full');
+  const [receiptNo, setReceiptNo] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Cheque' | 'Draft'>('Cash');
+  const [allocation, setAllocation] = useState<'Full' | 'Part'>('Full');
 
   // Calculate remaining due if it's a new receipt
   const totalReceivedSoFar = invoice.receipts?.reduce((sum, r) => sum + r.amountReceived, 0) || 0;
   const netDue = Math.max(0, invoice.totals.amountAfterTax - totalReceivedSoFar);
 
-  const [amountReceived, setAmountReceived] = useState<number>(initialReceipt?.amountReceived || netDue);
+  const [amountReceived, setAmountReceived] = useState<string>(netDue.toString());
 
-  const [refNumber, setRefNumber] = useState(initialReceipt?.refNumber || '');
-  const [instrumentDate, setInstrumentDate] = useState(initialReceipt?.instrumentDate || '');
+  const [refNumber, setRefNumber] = useState('');
+  const [instrumentDate, setInstrumentDate] = useState('');
+
+  const loadNextReceiptNo = async () => {
+    if (window.billingAPI?.getNextReceiptNo) {
+      const nextNo = await window.billingAPI.getNextReceiptNo(settings.financialYearPrefix);
+      setReceiptNo(nextNo.toString());
+    } else {
+      setReceiptNo('1');
+    }
+  };
 
   useEffect(() => {
-    const loadClientsAndReceiptNo = async () => {
+    const loadClientsData = async () => {
       if (window.billingAPI?.fetchClients) {
         const data = await window.billingAPI.fetchClients();
         setClients(data || []);
       }
-
-      if (!initialReceipt && window.billingAPI?.getNextReceiptNo) {
-        const nextNo = await window.billingAPI.getNextReceiptNo(settings.financialYearPrefix);
-        setReceiptNo(nextNo.toString().padStart(3, '0'));
-      }
-
       setLoading(false);
     };
-    loadClientsAndReceiptNo();
-  }, [initialReceipt, settings.financialYearPrefix]);
+    loadClientsData();
+  }, []);
+
+  useEffect(() => {
+    if (initialReceipt) {
+      setIsSaved(true);
+      setIsEditing(false);
+      setSavedReceiptId(initialReceipt.id);
+
+      const receiptNoStr = initialReceipt.receiptNo.split('/')[1] || initialReceipt.receiptNo;
+      setReceiptNo(receiptNoStr);
+      setDate(initialReceipt.date);
+      setPaymentMethod(initialReceipt.paymentMethod);
+      setAllocation(initialReceipt.allocation);
+      setAmountReceived(initialReceipt.amountReceived.toString());
+      setRefNumber(initialReceipt.refNumber || '');
+      setInstrumentDate(initialReceipt.instrumentDate || '');
+    } else {
+      setIsSaved(false);
+      setIsEditing(true);
+      setSavedReceiptId(null);
+      setReceiptNo('');
+      setDate(new Date().toISOString().split('T')[0]);
+      setPaymentMethod('Cash');
+      setAllocation('Full');
+      setAmountReceived(netDue.toString());
+      setRefNumber('');
+      setInstrumentDate('');
+      loadNextReceiptNo();
+    }
+  }, [initialReceipt, netDue]);
+
+  useEffect(() => {
+    if (!initialReceipt) {
+      loadNextReceiptNo();
+    }
+  }, [settings.financialYearPrefix, initialReceipt]);
 
   const client: Client = clients.find((c) => c.id === invoice.clientId) || {
     id: invoice.clientId || '',
@@ -66,6 +104,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
   };
 
   const handleSave = async () => {
+    const amt = parseFloat(amountReceived) || 0;
     const receiptData: Receipt = {
       id: savedReceiptId || crypto.randomUUID(),
       receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
@@ -73,7 +112,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
       invoiceId: invoice.id,
       paymentMethod,
       allocation,
-      amountReceived,
+      amountReceived: amt,
       refNumber: paymentMethod !== 'Cash' ? refNumber : undefined,
       instrumentDate: paymentMethod !== 'Cash' ? instrumentDate : undefined,
     };
@@ -97,17 +136,22 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
     }
   };
 
-  const amountInWords = numberToWords(amountReceived);
+  const amountInWords = numberToWords(parseFloat(amountReceived) || 0);
   const inputDisabled = isSaved && !isEditing;
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl shadow-2xl">
-        <CardHeader className="flex flex-row items-center justify-between border-b bg-muted/50 pb-4">
-          <CardTitle>Money Receipt Form</CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0 rounded-full">
-            <X className="h-4 w-4" />
+      <Card className="w-full max-w-2xl shadow-2xl relative">
+        <CardHeader className="relative flex flex-row items-center border-b bg-muted/50 pb-4 pl-16">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="absolute left-4 top-1/2 -translate-y-1/2 h-10 w-10 p-0 rounded-full border border-border bg-background text-muted-foreground hover:bg-destructive hover:text-destructive-foreground shadow-sm transition-colors"
+          >
+            <X className="h-6 w-6" />
           </Button>
+          <CardTitle>Money Receipt Form</CardTitle>
         </CardHeader>
         <CardContent className="pt-6 space-y-6">
 
@@ -190,11 +234,15 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
 
           <div className="pt-2">
             <Input
-              type="number"
-              step="0.01"
+              type="text"
               label="Amount Received (Rs.)"
-              value={amountReceived || ''}
-              onChange={(e) => setAmountReceived(parseFloat(e.target.value) || 0)}
+              value={amountReceived}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (/^\d*\.?\d*$/.test(val)) {
+                  setAmountReceived(val);
+                }
+              }}
               className="text-lg font-semibold"
               disabled={inputDisabled}
             />
@@ -231,6 +279,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
               variant="outline"
               size="sm"
               onClick={async () => {
+                const amt = parseFloat(amountReceived) || 0;
                 const receiptData: Receipt = {
                   id: savedReceiptId || crypto.randomUUID(),
                   receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
@@ -238,7 +287,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
                   invoiceId: invoice.id,
                   paymentMethod,
                   allocation,
-                  amountReceived,
+                  amountReceived: amt,
                   refNumber: paymentMethod !== 'Cash' ? refNumber : undefined,
                   instrumentDate: paymentMethod !== 'Cash' ? instrumentDate : undefined,
                 };
@@ -247,7 +296,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
                   invoiceData: invoice,
                   client: client,
                   settings: settings,
-                  amountInWords: numberToWords(amountReceived)
+                  amountInWords: numberToWords(amt)
                 };
                 try {
                   const res = await window.billingAPI?.printDocument('receipt', printData);
@@ -264,6 +313,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
               variant="outline"
               size="sm"
               onClick={async () => {
+                const amt = parseFloat(amountReceived) || 0;
                 const receiptData: Receipt = {
                   id: savedReceiptId || crypto.randomUUID(),
                   receiptNo: `${settings.financialYearPrefix}/${receiptNo}`,
@@ -271,7 +321,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
                   invoiceId: invoice.id,
                   paymentMethod,
                   allocation,
-                  amountReceived,
+                  amountReceived: amt,
                   refNumber: paymentMethod !== 'Cash' ? refNumber : undefined,
                   instrumentDate: paymentMethod !== 'Cash' ? instrumentDate : undefined,
                 };
@@ -280,7 +330,7 @@ export function ReceiptModal({ invoice, clientName, initialReceipt, onClose }: R
                   invoiceData: invoice,
                   client: client,
                   settings: settings,
-                  amountInWords: numberToWords(amountReceived)
+                  amountInWords: numberToWords(amt)
                 };
                 try {
                   const res = await window.billingAPI?.printDocument('both', printData);

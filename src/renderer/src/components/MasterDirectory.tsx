@@ -20,6 +20,11 @@ export function MasterDirectory() {
   const [isEditingSettings, setIsEditingSettings] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'Active' | 'Inactive' | 'All'>('Active');
 
+  // ── Error and Success message states ──
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
+
   // ── Local copy of settings for the form (edit-then-save pattern) ──
   const [localSettings, setLocalSettings] = useState(settings);
   useEffect(() => {
@@ -47,13 +52,18 @@ export function MasterDirectory() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+    setErrorMsg(null);
+    setSuccessMsg(null);
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setErrorMsg(null);
+      setSuccessMsg(null);
+
       if (formData.gstin && formData.gstin.length !== 15) {
-        alert('GSTIN must be exactly 15 characters.');
+        setErrorMsg('GSTIN must be exactly 15 characters.');
         return;
       }
 
@@ -71,8 +81,11 @@ export function MasterDirectory() {
       if (window.billingAPI?.saveClient) {
         const result = await window.billingAPI.saveClient(newClient);
         if (result.success) {
+          setSuccessMsg(formData.id ? '✅ Client updated successfully!' : '✅ Client saved successfully!');
           setFormData({ state: 'Maharashtra', stateCode: '27' });
           loadClients();
+        } else {
+          setErrorMsg('Failed to save client.');
         }
       } else {
         // Mock mode
@@ -86,15 +99,18 @@ export function MasterDirectory() {
           return [...prev, newClient];
         });
         setFormData({ state: 'Maharashtra', stateCode: '27' });
-        alert('✅ Client saved (Mock Mode)');
+        setSuccessMsg('✅ Client saved (Mock Mode)');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save client:', error);
+      setErrorMsg(error.message || 'Failed to save client.');
     }
   };
 
   const handleEdit = (client: Client) => {
     setFormData(client);
+    setErrorMsg(null);
+    setSuccessMsg(null);
   };
 
   const handleToggleStatus = async (client: Client) => {
@@ -118,11 +134,17 @@ export function MasterDirectory() {
 
   const handleToggleEditSettings = async () => {
     if (isEditingSettings) {
-      await updateSettings(localSettings);
-      alert('✅ Global settings updated successfully');
-      setIsEditingSettings(false);
+      try {
+        await updateSettings(localSettings);
+        setSettingsMsg('✅ Global settings updated successfully');
+        setTimeout(() => setSettingsMsg(null), 3000);
+        setIsEditingSettings(false);
+      } catch (error: any) {
+        setSettingsMsg(`❌ Error: ${error.message || 'Failed to update settings'}`);
+      }
     } else {
       setIsEditingSettings(true);
+      setSettingsMsg(null);
     }
   };
 
@@ -180,6 +202,17 @@ export function MasterDirectory() {
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleSave} className="flex flex-col gap-3">
+                    {errorMsg && (
+                      <div className="p-3 text-xs bg-red-100 dark:bg-red-950/30 text-red-600 dark:text-red-400 rounded-md border border-red-200 dark:border-red-800 font-medium">
+                        {errorMsg}
+                      </div>
+                    )}
+                    {successMsg && (
+                      <div className="p-3 text-xs bg-emerald-100 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 rounded-md border border-emerald-200 dark:border-emerald-800 font-medium">
+                        {successMsg}
+                      </div>
+                    )}
+
                     <Input
                       label="Client Name"
                       name="name"
@@ -241,7 +274,11 @@ export function MasterDirectory() {
                         variant="ghost"
                         size="sm"
                         className="text-muted-foreground"
-                        onClick={() => setFormData({ state: 'Maharashtra', stateCode: '27' })}
+                        onClick={() => {
+                          setFormData({ state: 'Maharashtra', stateCode: '27' });
+                          setErrorMsg(null);
+                          setSuccessMsg(null);
+                        }}
                       >
                         Cancel editing
                       </Button>
@@ -460,6 +497,15 @@ export function MasterDirectory() {
               </Card>
 
               <div className="mt-5">
+                {settingsMsg && (
+                  <div className={`p-3 mb-3 text-xs rounded-md border font-medium ${
+                    settingsMsg.startsWith('❌') 
+                      ? 'bg-red-100 dark:bg-red-950/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800' 
+                      : 'bg-emerald-100 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                  }`}>
+                    {settingsMsg}
+                  </div>
+                )}
                 <Button
                   className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
                   onClick={handleToggleEditSettings}

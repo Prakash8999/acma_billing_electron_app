@@ -64,14 +64,14 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
   const [monthText, setMonthText] = useState<string>('');
   const [additionalDesc, setAdditionalDesc] = useState<string>('');
   const [sacCode, setSacCode] = useState<string>(activeSettings.defaultSacCode);
-  const [waterConsumption, setWaterConsumption] = useState<number>(0);
-  const [rate, setRate] = useState<number>(activeSettings.defaultWaterRate);
-  const [extraCharges, setExtraCharges] = useState<number>(0);
+  const [waterConsumption, setWaterConsumption] = useState<string>('');
+  const [rate, setRate] = useState<string>(activeSettings.defaultWaterRate.toString());
+  const [extraCharges, setExtraCharges] = useState<string>('');
 
   // Other amounts
-  const [previousOutstanding, setPreviousOutstanding] = useState<number>(0);
+  const [previousOutstanding, setPreviousOutstanding] = useState<string>('');
   const [ifPaidAfterDate, setIfPaidAfterDate] = useState<string>('');
-  const [pleasePayRs, setPleasePayRs] = useState<number>(0);
+  const [pleasePayRs, setPleasePayRs] = useState<string>('');
 
   useEffect(() => {
     if (initialInvoice) {
@@ -87,9 +87,9 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       const item = initialInvoice.items[0];
       if (item) {
         setSacCode(item.sacCode);
-        setWaterConsumption(item.waterConsumption);
-        setRate(item.rate);
-        setExtraCharges(item.extraCharges);
+        setWaterConsumption(item.waterConsumption.toString());
+        setRate(item.rate.toString());
+        setExtraCharges(item.extraCharges.toString());
 
         const lines = item.description.split('\n');
         const firstLine = lines[0] || '';
@@ -98,9 +98,9 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
         setAdditionalDesc(lines.slice(1).join('\n'));
       }
 
-      setPreviousOutstanding(initialInvoice.totals.previousOutstanding);
+      setPreviousOutstanding(initialInvoice.totals.previousOutstanding.toString());
       setIfPaidAfterDate(initialInvoice.dpc.ifPaidAfterDate);
-      setPleasePayRs(initialInvoice.dpc.pleasePayRs);
+      setPleasePayRs(initialInvoice.dpc.pleasePayRs.toString());
     } else {
       setIsSaved(false);
       setIsEditing(false);
@@ -110,11 +110,12 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       setSelectedClientId('');
       setMonthText('');
       setAdditionalDesc('');
-      setWaterConsumption(0);
-      setExtraCharges(0);
-      setPreviousOutstanding(0);
+      setWaterConsumption('');
+      setRate(activeSettings.defaultWaterRate.toString());
+      setExtraCharges('');
+      setPreviousOutstanding('');
       setIfPaidAfterDate('');
-      setPleasePayRs(0);
+      setPleasePayRs('');
       loadNextInvoiceNo();
     }
   }, [initialInvoice]);
@@ -148,7 +149,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
   // Auto-populate rate when client changes
   useEffect(() => {
     if (selectedClient && !isSaved) {
-      setRate(selectedClient.defaultRate || activeSettings.defaultWaterRate);
+      setRate((selectedClient.defaultRate || activeSettings.defaultWaterRate).toString());
     }
   }, [selectedClient, activeSettings.defaultWaterRate, isSaved]);
 
@@ -164,8 +165,11 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
   const sgstRate = activeSettings.sgstPercentage / 100;
 
   const calculations = useMemo(() => {
-    const baseWaterCharge = (waterConsumption || 0) * (rate || 0);
-    const amountBeforeTax = baseWaterCharge + (extraCharges || 0);
+    const wc = parseFloat(waterConsumption) || 0;
+    const r = parseFloat(rate) || 0;
+    const ec = parseFloat(extraCharges) || 0;
+    const baseWaterCharge = wc * r;
+    const amountBeforeTax = baseWaterCharge + ec;
     const cgstAmount = amountBeforeTax * cgstRate;
     const sgstAmount = amountBeforeTax * sgstRate;
     const totalTaxAmount = cgstAmount + sgstAmount;
@@ -195,13 +199,19 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       return null;
     }
 
+    const wc = parseFloat(waterConsumption) || 0;
+    const r = parseFloat(rate) || 0;
+    const ec = parseFloat(extraCharges) || 0;
+    const prevOutstanding = parseFloat(previousOutstanding) || 0;
+    const payRs = parseFloat(pleasePayRs) || 0;
+
     const invoiceItem: InvoiceItem = {
       id: crypto.randomUUID(),
       description: `Effluent Treatment Charges for the month of ${monthText}\n${additionalDesc}`.trim(),
       sacCode: sacCode,
-      waterConsumption,
-      rate,
-      extraCharges,
+      waterConsumption: wc,
+      rate: r,
+      extraCharges: ec,
       baseCharge: calculations.baseWaterCharge,
       taxableAmount: calculations.amountBeforeTax,
     };
@@ -214,17 +224,17 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       items: [invoiceItem],
       totals: {
         baseCharge: calculations.baseWaterCharge,
-        extraCharges: extraCharges,
+        extraCharges: ec,
         amountBeforeTax: calculations.amountBeforeTax,
         cgstAmount: calculations.cgstAmount,
         sgstAmount: calculations.sgstAmount,
         totalTaxAmount: calculations.totalTaxAmount,
         amountAfterTax: calculations.amountAfterTax,
-        previousOutstanding: previousOutstanding,
+        previousOutstanding: prevOutstanding,
       },
       dpc: {
         ifPaidAfterDate,
-        pleasePayRs,
+        pleasePayRs: payRs,
       },
       status: 'Unpaid',
       systemSettingsSnapshot: activeSettings,
@@ -259,7 +269,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
           `Date: ${invoiceData.date}\n` +
           `Water: ${waterConsumption} M³ × ₹${rate}/M³\n` +
           `Base Charge: ₹${calculations.baseWaterCharge.toFixed(2)}\n` +
-          `Extra Charges: ₹${extraCharges.toFixed(2)}\n` +
+          `Extra Charges: ₹${(parseFloat(extraCharges) || 0).toFixed(2)}\n` +
           `Before Tax: ₹${calculations.amountBeforeTax.toFixed(2)}\n` +
           `CGST (2.5%): ₹${calculations.cgstAmount.toFixed(2)}\n` +
           `SGST (2.5%): ₹${calculations.sgstAmount.toFixed(2)}\n` +
@@ -442,26 +452,39 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
 
                 <div className="grid grid-cols-3 gap-4 mt-3">
                   <Input
-                    type="number"
+                    type="text"
                     label="Water Consumption (M³)"
-                    value={waterConsumption || ''}
-                    onChange={(e) => setWaterConsumption(parseFloat(e.target.value) || 0)}
+                    value={waterConsumption}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setWaterConsumption(val);
+                      }
+                    }}
                     disabled={isSaved && !isEditing}
                   />
                   <Input
-                    type="number"
-                    step="0.01"
+                    type="text"
                     label="Rate (Rs / M³)"
-                    value={rate || ''}
+                    value={rate}
                     disabled
-                    onChange={(e) => setRate(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setRate(val);
+                      }
+                    }}
                   />
                   <Input
-                    type="number"
-                    step="0.01"
+                    type="text"
                     label="Extra Misc Charges (Rs.)"
-                    value={extraCharges || ''}
-                    onChange={(e) => setExtraCharges(parseFloat(e.target.value) || 0)}
+                    value={extraCharges}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setExtraCharges(val);
+                      }
+                    }}
                     disabled={isSaved && !isEditing}
                   />
                 </div>
@@ -477,11 +500,15 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <Input
-                    type="number"
-                    step="0.01"
+                    type="text"
                     label="Previous Outstanding Rs."
-                    value={previousOutstanding || ''}
-                    onChange={(e) => setPreviousOutstanding(parseFloat(e.target.value) || 0)}
+                    value={previousOutstanding}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setPreviousOutstanding(val);
+                      }
+                    }}
                     disabled={isSaved && !isEditing}
                   />
                   <Input
@@ -493,10 +520,14 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                   />
                   <Input
                     label="Please Pay Rs."
-                    type="number"
-                    step="0.01"
-                    value={pleasePayRs || ''}
-                    onChange={(e) => setPleasePayRs(parseFloat(e.target.value) || 0)}
+                    type="text"
+                    value={pleasePayRs}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setPleasePayRs(val);
+                      }
+                    }}
                     disabled={isSaved && !isEditing}
                   />
                 </div>
@@ -520,10 +551,10 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                     <span className="text-slate-400">Base Water Charge</span>
                     <span className="tabular-nums">₹ {calculations.baseWaterCharge.toFixed(2)}</span>
                   </div>
-                  {extraCharges > 0 && (
+                  {parseFloat(extraCharges) > 0 && (
                     <div className="flex justify-between">
                       <span className="text-slate-400">Extra Charges</span>
-                      <span className="tabular-nums">₹ {extraCharges.toFixed(2)}</span>
+                      <span className="tabular-nums">₹ {parseFloat(extraCharges).toFixed(2)}</span>
                     </div>
                   )}
 

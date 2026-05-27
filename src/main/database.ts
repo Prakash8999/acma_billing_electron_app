@@ -110,13 +110,6 @@ const createTables = async () => {
     )
   `);
 
-  // Try to add the column if it doesn't exist (for existing databases)
-  try {
-    await run('ALTER TABLE invoices ADD COLUMN settingsSnapshot TEXT');
-  } catch (error) {
-    // Column likely already exists
-  }
-
   await run(`
     CREATE TABLE IF NOT EXISTS invoice_items (
       id TEXT PRIMARY KEY,
@@ -368,7 +361,8 @@ export const saveReceipt = async (receipt: import('../shared/types').Receipt) =>
 };
 
 export const getNextInvoiceNo = async (prefix: string) => {
-  const rows = await all('SELECT invoiceNo FROM invoices WHERE invoiceNo LIKE ?', [`${prefix}/%`]);
+  const cleanPrefix = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  const rows = await all('SELECT invoiceNo FROM invoices WHERE invoiceNo LIKE ?', [`${cleanPrefix}/%`]);
   let maxNum = 0;
   for (const r of rows) {
     const parts = r.invoiceNo.split('/');
@@ -383,7 +377,8 @@ export const getNextInvoiceNo = async (prefix: string) => {
 };
 
 export const getNextReceiptNo = async (prefix: string) => {
-  const rows = await all('SELECT receiptNo FROM receipts WHERE receiptNo LIKE ?', [`${prefix}/%`]);
+  const cleanPrefix = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  const rows = await all('SELECT receiptNo FROM receipts WHERE receiptNo LIKE ?', [`${cleanPrefix}/%`]);
   let maxNum = 0;
   for (const r of rows) {
     const parts = r.receiptNo.split('/');
