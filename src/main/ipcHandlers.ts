@@ -154,4 +154,13 @@ export const registerIpcHandlers = () => {
       throw new Error(error.message);
     }
   });
+
+  ipcMain.handle('getNextReceiptNo', async (_, prefix) => {
+    try {
+      return await db.getNextReceiptNo(prefix);
+    } catch (error: any) {
+      console.error(error);
+      throw new Error(error.message);
+    }
+  });
 };

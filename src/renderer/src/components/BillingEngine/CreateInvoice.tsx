@@ -6,7 +6,7 @@ import { Button } from '../ui/Button';
 import { Client, Invoice, InvoiceItem } from '../../../../shared/types';
 import { numberToWords } from '../../utils/numberToWords';
 import { useSystemSettings } from '../../context/SystemSettingsContext';
-import { Calculator, Save, Printer, Building2, FileText, Receipt, IndianRupee } from 'lucide-react';
+import { Calculator, Save, Printer, Building2, FileText, Receipt, IndianRupee, Edit } from 'lucide-react';
 
 // Global default rate (Rs / M³) — same for all clients
 const GLOBAL_DEFAULT_RATE = 10;
@@ -42,8 +42,16 @@ const MOCK_CLIENTS: Client[] = [
   },
 ];
 
-export function CreateInvoice() {
-  const { settings } = useSystemSettings();
+export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | null }) {
+  const { settings: globalSettings } = useSystemSettings();
+
+  const activeSettings = useMemo(() => {
+    return initialInvoice?.systemSettingsSnapshot || globalSettings;
+  }, [initialInvoice, globalSettings]);
+
+  const [isSaved, setIsSaved] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [savedInvoiceId, setSavedInvoiceId] = useState<string | null>(null);
 
   const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
@@ -55,9 +63,9 @@ export function CreateInvoice() {
   // Billing Grid
   const [monthText, setMonthText] = useState<string>('');
   const [additionalDesc, setAdditionalDesc] = useState<string>('');
-  const [sacCode, setSacCode] = useState<string>(settings.defaultSacCode);
+  const [sacCode, setSacCode] = useState<string>(activeSettings.defaultSacCode);
   const [waterConsumption, setWaterConsumption] = useState<number>(0);
-  const [rate, setRate] = useState<number>(settings.defaultWaterRate);
+  const [rate, setRate] = useState<number>(activeSettings.defaultWaterRate);
   const [extraCharges, setExtraCharges] = useState<number>(0);
 
   // Other amounts
@@ -66,9 +74,55 @@ export function CreateInvoice() {
   const [pleasePayRs, setPleasePayRs] = useState<number>(0);
 
   useEffect(() => {
+    if (initialInvoice) {
+      setIsSaved(true);
+      setIsEditing(false);
+      setSavedInvoiceId(initialInvoice.id);
+
+      const invoiceNoStr = initialInvoice.invoiceNo.split('/')[1] || initialInvoice.invoiceNo;
+      setInvoiceNo(invoiceNoStr);
+      setInvoiceDate(initialInvoice.date);
+      setSelectedClientId(initialInvoice.clientId);
+
+      const item = initialInvoice.items[0];
+      if (item) {
+        setSacCode(item.sacCode);
+        setWaterConsumption(item.waterConsumption);
+        setRate(item.rate);
+        setExtraCharges(item.extraCharges);
+
+        const lines = item.description.split('\n');
+        const firstLine = lines[0] || '';
+        const monthMatch = firstLine.match(/month of (.*)/);
+        setMonthText(monthMatch ? monthMatch[1].trim() : '');
+        setAdditionalDesc(lines.slice(1).join('\n'));
+      }
+
+      setPreviousOutstanding(initialInvoice.totals.previousOutstanding);
+      setIfPaidAfterDate(initialInvoice.dpc.ifPaidAfterDate);
+      setPleasePayRs(initialInvoice.dpc.pleasePayRs);
+    } else {
+      setIsSaved(false);
+      setIsEditing(false);
+      setSavedInvoiceId(null);
+      setInvoiceNo('');
+      setInvoiceDate(new Date().toISOString().split('T')[0]);
+      setSelectedClientId('');
+      setMonthText('');
+      setAdditionalDesc('');
+      setWaterConsumption(0);
+      setExtraCharges(0);
+      setPreviousOutstanding(0);
+      setIfPaidAfterDate('');
+      setPleasePayRs(0);
+      loadNextInvoiceNo();
+    }
+  }, [initialInvoice]);
+
+  useEffect(() => {
     loadClients();
-    loadNextInvoiceNo();
-  }, [settings.financialYearPrefix]);
+    if (!initialInvoice) loadNextInvoiceNo();
+  }, [activeSettings.financialYearPrefix, initialInvoice]);
 
   const loadClients = async () => {
     // Try IPC first, fall back to mock data
@@ -80,7 +134,7 @@ export function CreateInvoice() {
 
   const loadNextInvoiceNo = async () => {
     if (window.billingAPI?.getNextInvoiceNo) {
-      const nextNo = await window.billingAPI.getNextInvoiceNo(settings.financialYearPrefix);
+      const nextNo = await window.billingAPI.getNextInvoiceNo(activeSettings.financialYearPrefix);
       setInvoiceNo(nextNo.toString());
     } else {
       setInvoiceNo('1');
@@ -93,19 +147,21 @@ export function CreateInvoice() {
 
   // Auto-populate rate when client changes
   useEffect(() => {
-    if (selectedClient) {
-      setRate(selectedClient.defaultRate || settings.defaultWaterRate);
+    if (selectedClient && !isSaved) {
+      setRate(selectedClient.defaultRate || activeSettings.defaultWaterRate);
     }
-  }, [selectedClient, settings.defaultWaterRate]);
+  }, [selectedClient, activeSettings.defaultWaterRate, isSaved]);
 
   // Sync SAC code when settings change
   useEffect(() => {
-    setSacCode(settings.defaultSacCode);
-  }, [settings.defaultSacCode]);
+    if (!isSaved) {
+      setSacCode(activeSettings.defaultSacCode);
+    }
+  }, [activeSettings.defaultSacCode, isSaved]);
 
   // Reactive Calculation Matrix — reads tax rates from context
-  const cgstRate = settings.cgstPercentage / 100;
-  const sgstRate = settings.sgstPercentage / 100;
+  const cgstRate = activeSettings.cgstPercentage / 100;
+  const sgstRate = activeSettings.sgstPercentage / 100;
 
   const calculations = useMemo(() => {
     const baseWaterCharge = (waterConsumption || 0) * (rate || 0);
@@ -151,8 +207,8 @@ export function CreateInvoice() {
     };
 
     const invoiceData: Invoice = {
-      id: crypto.randomUUID(),
-      invoiceNo: `${settings.financialYearPrefix}/${invoiceNo}`,
+      id: savedInvoiceId || crypto.randomUUID(),
+      invoiceNo: `${activeSettings.financialYearPrefix}/${invoiceNo}`,
       date: invoiceDate,
       clientId: selectedClient.id,
       items: [invoiceItem],
@@ -171,6 +227,7 @@ export function CreateInvoice() {
         pleasePayRs,
       },
       status: 'Unpaid',
+      systemSettingsSnapshot: activeSettings,
     };
 
     return invoiceData;
@@ -185,10 +242,16 @@ export function CreateInvoice() {
         const res = await window.billingAPI.saveInvoice(invoiceData);
         if (res.success) {
           alert('Invoice saved successfully');
-          loadNextInvoiceNo();
+          setSavedInvoiceId(invoiceData.id);
+          setIsSaved(true);
+          setIsEditing(false);
+          // Only load next invoice no if it's a completely new form
         }
       } else {
         // Mock mode — no backend, show summary to user
+        setSavedInvoiceId(invoiceData.id);
+        setIsSaved(true);
+        setIsEditing(false);
         alert(
           `✅ Invoice Saved (Mock Mode)\n\n` +
           `Invoice No: ${invoiceData.invoiceNo}\n` +
@@ -218,10 +281,10 @@ export function CreateInvoice() {
       const printData = {
         invoiceData,
         client: selectedClient,
-        settings: settings,
+        settings: activeSettings,
         amountInWords
       };
-      
+
       try {
         const res = await window.billingAPI.printDocument('invoice', printData) as any;
         if (res.success) {
@@ -251,8 +314,8 @@ export function CreateInvoice() {
               </p>
             </div>
             <div className="text-right text-xs text-slate-300 space-y-0.5">
-              <div>Tel: {settings.officialPhone} &nbsp;|&nbsp; Cell: {settings.officialMobile}</div>
-              <div>{settings.officialEmail}</div>
+              <div>Tel: {activeSettings.officialPhone} &nbsp;|&nbsp; Cell: {activeSettings.officialMobile}</div>
+              <div>{activeSettings.officialEmail}</div>
               <div className="font-semibold text-white mt-1">GSTIN: 27AAAAA4636P1ZH &nbsp;|&nbsp; PAN: AAAAA4636P</div>
             </div>
           </div>
@@ -274,13 +337,14 @@ export function CreateInvoice() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="relative mt-2">
                     <div className="absolute inset-y-0 left-0 pl-3 pt-4 flex items-center pointer-events-none text-sm text-muted-foreground font-mono">
-                      {settings.financialYearPrefix}/
+                      {activeSettings.financialYearPrefix}/
                     </div>
                     <input
                       type="text"
-                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[4.7rem] pr-3 py-1 pt-5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex h-12 w-full rounded-md border border-input bg-transparent pl-[4.7rem] pr-3 py-1 pt-5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
                       value={invoiceNo}
                       onChange={(e) => setInvoiceNo(e.target.value)}
+                      disabled={isSaved && !isEditing}
                     />
                     <label className="absolute left-3 top-1 text-xs text-muted-foreground pointer-events-none">
                       Invoice Number
@@ -291,6 +355,7 @@ export function CreateInvoice() {
                     label="Invoice Date"
                     value={invoiceDate}
                     onChange={(e) => setInvoiceDate(e.target.value)}
+                    disabled={isSaved && !isEditing}
                   />
                 </div>
               </CardContent>
@@ -308,6 +373,7 @@ export function CreateInvoice() {
                   options={clients.map((c) => ({ value: c.id, label: c.name }))}
                   value={selectedClientId}
                   onChange={(e) => setSelectedClientId(e.target.value)}
+                  disabled={isSaved && !isEditing}
                 />
                 {selectedClient && (
                   <div className="grid grid-cols-4 gap-x-6 gap-y-3 text-sm mt-4 p-4 bg-muted/30 rounded-lg border border-muted">
@@ -351,6 +417,7 @@ export function CreateInvoice() {
                       value={monthText}
                       onChange={(e) => setMonthText(e.target.value)}
                       placeholder="e.g. March 2026"
+                      disabled={isSaved && !isEditing}
                     />
                   </div>
                   <Input
@@ -362,10 +429,11 @@ export function CreateInvoice() {
 
                 <div className="relative mt-3">
                   <textarea
-                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 pt-5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[56px] resize-none"
+                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 pt-5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[56px] resize-none disabled:opacity-50 disabled:cursor-not-allowed"
                     placeholder="Additional Descriptions"
                     value={additionalDesc}
                     onChange={(e) => setAdditionalDesc(e.target.value)}
+                    disabled={isSaved && !isEditing}
                   />
                   <label className="absolute left-3 top-1 text-xs text-muted-foreground pointer-events-none">
                     Additional Descriptions (e.g. Sample Testing Charges)
@@ -378,6 +446,7 @@ export function CreateInvoice() {
                     label="Water Consumption (M³)"
                     value={waterConsumption || ''}
                     onChange={(e) => setWaterConsumption(parseFloat(e.target.value) || 0)}
+                    disabled={isSaved && !isEditing}
                   />
                   <Input
                     type="number"
@@ -393,6 +462,7 @@ export function CreateInvoice() {
                     label="Extra Misc Charges (Rs.)"
                     value={extraCharges || ''}
                     onChange={(e) => setExtraCharges(parseFloat(e.target.value) || 0)}
+                    disabled={isSaved && !isEditing}
                   />
                 </div>
               </CardContent>
@@ -412,12 +482,14 @@ export function CreateInvoice() {
                     label="Previous Outstanding Rs."
                     value={previousOutstanding || ''}
                     onChange={(e) => setPreviousOutstanding(parseFloat(e.target.value) || 0)}
+                    disabled={isSaved && !isEditing}
                   />
                   <Input
                     label="DPC: If Paid after"
                     type="date"
                     value={ifPaidAfterDate}
                     onChange={(e) => setIfPaidAfterDate(e.target.value)}
+                    disabled={isSaved && !isEditing}
                   />
                   <Input
                     label="Please Pay Rs."
@@ -425,6 +497,7 @@ export function CreateInvoice() {
                     step="0.01"
                     value={pleasePayRs || ''}
                     onChange={(e) => setPleasePayRs(parseFloat(e.target.value) || 0)}
+                    disabled={isSaved && !isEditing}
                   />
                 </div>
               </CardContent>
@@ -460,15 +533,15 @@ export function CreateInvoice() {
                     <span className="tabular-nums">₹ {calculations.amountBeforeTax.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Add: CGST @ {settings.cgstPercentage}%</span>
+                    <span>Add: CGST @ {activeSettings.cgstPercentage}%</span>
                     <span className="tabular-nums">₹ {calculations.cgstAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Add: SGST @ {settings.sgstPercentage}%</span>
+                    <span>Add: SGST @ {activeSettings.sgstPercentage}%</span>
                     <span className="tabular-nums">₹ {calculations.sgstAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Total Tax (GST @ {settings.cgstPercentage + settings.sgstPercentage}%)</span>
+                    <span>Total Tax (GST @ {activeSettings.cgstPercentage + activeSettings.sgstPercentage}%)</span>
                     <span className="tabular-nums">₹ {calculations.totalTaxAmount.toFixed(2)}</span>
                   </div>
                   {calculations.roundOff !== 0 && (
@@ -495,19 +568,31 @@ export function CreateInvoice() {
 
                 {/* Action buttons */}
                 <div className="p-4 bg-white/5 border-t border-white/10 flex gap-2">
+                  {isSaved && !isEditing ? (
+                    <Button
+                      variant="secondary"
+                      className="w-1/2 gap-2 bg-blue-600 hover:bg-blue-700 text-black border-0"
+                      onClick={() => setIsEditing(true)}
+                    >
+                      <Edit className="w-4 h-4" />
+                      Edit Invoice
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      className="w-1/2 gap-2 bg-emerald-600 hover:bg-emerald-700 text-black border-0"
+                      onClick={handleSave}
+                    >
+                      <Save className="w-4 h-4" />
+                      Save Invoice
+                    </Button>
+                  )}
                   <Button
                     variant="secondary"
-                    className="w-1/2 gap-2 bg-emerald-600 hover:bg-emerald-700 text-black border-0"
-                    onClick={handleSave}
-                  >
-                    <Save className="w-4 h-4" />
-                    Save Invoice
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="w-1/2 gap-2 bg-white/10 hover:bg-white/20 text-white border-0"
-                    onClick={handlePrint}
+                    className={`w-1/2 gap-2 text-white border-0 ${(!isSaved || isEditing) ? 'bg-white/5 opacity-50 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20'}`}
+                    onClick={(!isSaved || isEditing) ? undefined : handlePrint}
                     title="Print Invoice"
+                    disabled={!isSaved || isEditing}
                   >
                     Print Invoice
                     <Printer className="w-4 h-4" />
@@ -522,8 +607,8 @@ export function CreateInvoice() {
                   <div className="text-muted-foreground space-y-0.5">
                     <div className="font-medium text-foreground">AMBARNATH JAI-HIND CO-OP. BANK LTD.</div>
                     <div>Branch: Main Branch, Ambarnath (West)</div>
-                    <div>Current A/c No.: <span className="font-mono">{settings.bankAccountNo}</span></div>
-                    <div>IFSC: <span className="font-mono">{settings.bankIfscCode}</span> &nbsp;|&nbsp; MICR: <span className="font-mono">{settings.bankMicrCode}</span></div>
+                    <div>Current A/c No.: <span className="font-mono">{activeSettings.bankAccountNo}</span></div>
+                    <div>IFSC: <span className="font-mono">{activeSettings.bankIfscCode}</span> &nbsp;|&nbsp; MICR: <span className="font-mono">{activeSettings.bankMicrCode}</span></div>
                   </div>
                 </CardContent>
               </Card>

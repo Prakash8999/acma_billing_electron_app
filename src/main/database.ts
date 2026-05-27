@@ -105,9 +105,17 @@ const createTables = async () => {
       previousOutstanding REAL,
       ifPaidAfterDate TEXT,
       pleasePayRs REAL,
+      settingsSnapshot TEXT,
       FOREIGN KEY (clientId) REFERENCES clients (id)
     )
   `);
+
+  // Try to add the column if it doesn't exist (for existing databases)
+  try {
+    await run('ALTER TABLE invoices ADD COLUMN settingsSnapshot TEXT');
+  } catch (error) {
+    // Column likely already exists
+  }
 
   await run(`
     CREATE TABLE IF NOT EXISTS invoice_items (
@@ -230,9 +238,21 @@ export const fetchInvoices = async () => {
       ifPaidAfterDate: inv.ifPaidAfterDate,
       pleasePayRs: inv.pleasePayRs
     };
+    if (inv.settingsSnapshot) {
+      try {
+        inv.systemSettingsSnapshot = JSON.parse(inv.settingsSnapshot);
+      } catch (e) {
+        console.error('Failed to parse settings snapshot:', e);
+      }
+    }
+    
     // Fetch items
     const items = await all('SELECT * FROM invoice_items WHERE invoiceId = ?', [inv.id]);
     inv.items = items;
+    
+    // Fetch receipts
+    const receipts = await all('SELECT * FROM receipts WHERE invoiceId = ? ORDER BY date ASC', [inv.id]);
+    inv.receipts = receipts;
     
     // Clean up flat properties
     delete inv.baseCharge;
@@ -245,6 +265,7 @@ export const fetchInvoices = async () => {
     delete inv.previousOutstanding;
     delete inv.ifPaidAfterDate;
     delete inv.pleasePayRs;
+    delete inv.settingsSnapshot;
   }
   return invoices;
 };
@@ -259,14 +280,16 @@ export const saveInvoice = async (invoice: any) => {
           invoiceNo = ?, date = ?, clientId = ?, status = ?,
           baseCharge = ?, extraCharges = ?, amountBeforeTax = ?, cgstAmount = ?,
           sgstAmount = ?, totalTaxAmount = ?, amountAfterTax = ?, previousOutstanding = ?,
-          ifPaidAfterDate = ?, pleasePayRs = ?
+          ifPaidAfterDate = ?, pleasePayRs = ?, settingsSnapshot = ?
         WHERE id = ?
       `, [
         invoice.invoiceNo, invoice.date, invoice.clientId, invoice.status,
         invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.amountBeforeTax,
         invoice.totals.cgstAmount, invoice.totals.sgstAmount, invoice.totals.totalTaxAmount,
         invoice.totals.amountAfterTax, invoice.totals.previousOutstanding,
-        invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs, invoice.id
+        invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs,
+        invoice.systemSettingsSnapshot ? JSON.stringify(invoice.systemSettingsSnapshot) : null,
+        invoice.id
       ]);
       await run('DELETE FROM invoice_items WHERE invoiceId = ?', [invoice.id]);
     } else {
@@ -275,14 +298,15 @@ export const saveInvoice = async (invoice: any) => {
           id, invoiceNo, date, clientId, status,
           baseCharge, extraCharges, amountBeforeTax, cgstAmount,
           sgstAmount, totalTaxAmount, amountAfterTax, previousOutstanding,
-          ifPaidAfterDate, pleasePayRs
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ifPaidAfterDate, pleasePayRs, settingsSnapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         invoice.id, invoice.invoiceNo, invoice.date, invoice.clientId, invoice.status,
         invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.amountBeforeTax,
         invoice.totals.cgstAmount, invoice.totals.sgstAmount, invoice.totals.totalTaxAmount,
         invoice.totals.amountAfterTax, invoice.totals.previousOutstanding,
-        invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs
+        invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs,
+        invoice.systemSettingsSnapshot ? JSON.stringify(invoice.systemSettingsSnapshot) : null
       ]);
     }
 
@@ -301,20 +325,46 @@ export const saveInvoice = async (invoice: any) => {
   }
 };
 
-export const saveReceipt = async (receipt: any) => {
-  await run(`
-    INSERT INTO receipts (id, receiptNo, date, invoiceId, paymentMethod, allocation, amountReceived, refNumber, instrumentDate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [receipt.id, receipt.receiptNo, receipt.date, receipt.invoiceId, receipt.paymentMethod, receipt.allocation, receipt.amountReceived, receipt.refNumber, receipt.instrumentDate]);
+export const saveReceipt = async (receipt: import('../shared/types').Receipt) => {
+  await run('BEGIN TRANSACTION');
+  try {
+    const existing = await get('SELECT id FROM receipts WHERE id = ?', [receipt.id]);
+    if (existing) {
+      await run(`
+        UPDATE receipts SET
+          receiptNo = ?, date = ?, invoiceId = ?, paymentMethod = ?, allocation = ?, amountReceived = ?, refNumber = ?, instrumentDate = ?
+        WHERE id = ?
+      `, [receipt.receiptNo, receipt.date, receipt.invoiceId, receipt.paymentMethod, receipt.allocation, receipt.amountReceived, receipt.refNumber, receipt.instrumentDate, receipt.id]);
+    } else {
+      await run(`
+        INSERT INTO receipts (id, receiptNo, date, invoiceId, paymentMethod, allocation, amountReceived, refNumber, instrumentDate)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [receipt.id, receipt.receiptNo, receipt.date, receipt.invoiceId, receipt.paymentMethod, receipt.allocation, receipt.amountReceived, receipt.refNumber, receipt.instrumentDate]);
+    }
+    // Re-calculate invoice status based on total receipts
+    const allReceipts = await all('SELECT amountReceived FROM receipts WHERE invoiceId = ?', [receipt.invoiceId]);
+    const totalReceived = allReceipts.reduce((sum, r) => sum + r.amountReceived, 0);
+    
+    const invoice = await get('SELECT amountAfterTax FROM invoices WHERE id = ?', [receipt.invoiceId]);
+    
+    let newStatus = 'Unpaid';
+    if (invoice) {
+      // Allow a small epsilon for floating point inaccuracies
+      if (totalReceived >= invoice.amountAfterTax - 0.01) {
+        newStatus = 'Fully Paid';
+      } else if (totalReceived > 0) {
+        newStatus = 'Partially Paid';
+      }
+    }
+    
+    await run('UPDATE invoices SET status = ? WHERE id = ?', [newStatus, receipt.invoiceId]);
 
-  if (receipt.allocation === 'Full') {
-    await run('UPDATE invoices SET status = ? WHERE id = ?', ['Fully Paid', receipt.invoiceId]);
-  } else {
-    // If it's part payment, we might mark as partially paid. 
-    await run('UPDATE invoices SET status = ? WHERE id = ?', ['Partially Paid', receipt.invoiceId]);
+    await run('COMMIT');
+    return { success: true, data: receipt };
+  } catch (error) {
+    await run('ROLLBACK');
+    throw error;
   }
-
-  return { success: true, data: receipt };
 };
 
 export const getNextInvoiceNo = async (prefix: string) => {
@@ -322,6 +372,21 @@ export const getNextInvoiceNo = async (prefix: string) => {
   let maxNum = 0;
   for (const r of rows) {
     const parts = r.invoiceNo.split('/');
+    if (parts.length === 2) {
+      const num = parseInt(parts[1], 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
+      }
+    }
+  }
+  return maxNum + 1;
+};
+
+export const getNextReceiptNo = async (prefix: string) => {
+  const rows = await all('SELECT receiptNo FROM receipts WHERE receiptNo LIKE ?', [`${prefix}/%`]);
+  let maxNum = 0;
+  for (const r of rows) {
+    const parts = r.receiptNo.split('/');
     if (parts.length === 2) {
       const num = parseInt(parts[1], 10);
       if (!isNaN(num) && num > maxNum) {

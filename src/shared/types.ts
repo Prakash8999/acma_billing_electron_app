@@ -41,6 +41,8 @@ export interface Invoice {
     pleasePayRs: number;
   };
   status: 'Unpaid' | 'Partially Paid' | 'Fully Paid';
+  systemSettingsSnapshot?: SystemSettings;
+  receipts?: Receipt[];
 }
 
 export interface Receipt {
@@ -85,10 +87,20 @@ declare global {
       fetchInvoices: () => Promise<(Invoice & { clientName: string })[]>;
       saveInvoice: (invoiceData: Invoice) => Promise<{ success: boolean; data: Invoice }>;
       saveReceipt: (receiptData: Receipt) => Promise<{ success: boolean; data: Receipt }>;
-      printDocument: (documentType: 'invoice' | 'receipt' | 'both', data: any) => Promise<boolean>;
+      printDocument: (
+        documentType: 'invoice' | 'receipt' | 'both',
+        data: {
+          invoiceData: Invoice;
+          client: Client;
+          settings: SystemSettings;
+          amountInWords: string;
+          receiptData?: Receipt;
+        }
+      ) => Promise<{ success: boolean; filePath: string }>;
       getSystemSettings: () => Promise<SystemSettings>;
       updateSystemSettings: (settings: SystemSettings) => Promise<{ success: boolean }>;
       getNextInvoiceNo: (prefix: string) => Promise<number>;
+      getNextReceiptNo: (prefix: string) => Promise<number>;
     };
   }
 }
