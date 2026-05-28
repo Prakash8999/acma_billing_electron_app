@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent } from '../ui/Card';
 import { Input } from '../ui/Input';
-import { Select } from '../ui/Select';
+import { SearchSelect } from '../ui/SearchSelect';
 import { Button } from '../ui/Button';
+
+
 import { Client, Invoice, InvoiceItem } from '../../../../shared/types';
 import { numberToWords } from '../../utils/numberToWords';
 import { useSystemSettings } from '../../context/SystemSettingsContext';
@@ -372,19 +374,21 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
             </Card>
 
             {/* Receiver Details */}
-            <Card>
+            <Card className="relative z-20">
               <CardContent className="p-4 pt-2">
+
                 <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-muted-foreground">
                   <Building2 className="w-4 h-4" />
                   Receiver Details (Billed To)
                 </div>
-                <Select
+                <SearchSelect
                   label="Select Client"
                   options={clients.map((c) => ({ value: c.id, label: c.name }))}
                   value={selectedClientId}
                   onChange={(e) => setSelectedClientId(e.target.value)}
                   disabled={isSaved && !isEditing}
                 />
+
                 {selectedClient && (
                   <div className="grid grid-cols-4 gap-x-6 gap-y-3 text-sm mt-4 p-4 bg-muted/30 rounded-lg border border-muted">
                     <div className="col-span-2">

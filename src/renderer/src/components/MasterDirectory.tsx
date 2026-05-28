@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from './ui/Card';
 import { Input } from './ui/Input';
+
 import { Button } from './ui/Button';
 import { Client } from '../../../shared/types';
 import { useSystemSettings } from '../context/SystemSettingsContext';
 import {
   UserPlus, Save, Edit, Droplets, Settings, Landmark, Phone,
-  Percent, Calendar, Archive, ArchiveRestore
+  Percent, Calendar, Archive, ArchiveRestore, FileSpreadsheet, AlertCircle, X
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+
 
 export function MasterDirectory() {
   const { settings, updateSettings } = useSystemSettings();
@@ -25,7 +28,24 @@ export function MasterDirectory() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
 
+  // ── Bulk Upload states ──
+  const [isUploading, setIsUploading] = useState(false);
+  const [showUploadSummary, setShowUploadSummary] = useState(false);
+  const [uploadSummary, setUploadSummary] = useState<{
+    total: number;
+    added: number;
+    updated: number;
+    failed: number;
+    errors: { row: number; name: string; reason: string }[];
+  } | null>(null);
+
+  // ── Search & Pagination states ──
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   // ── Local copy of settings for the form (edit-then-save pattern) ──
+
   const [localSettings, setLocalSettings] = useState(settings);
   useEffect(() => {
     setLocalSettings(settings);
@@ -48,6 +68,183 @@ export function MasterDirectory() {
       console.error('Failed to fetch clients:', error);
     }
   };
+
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = evt.target?.result;
+        if (!data) {
+          throw new Error('Could not read file data');
+        }
+
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        if (!sheetName) {
+          throw new Error('Excel workbook has no sheets');
+        }
+
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json<any>(worksheet);
+
+        if (json.length === 0) {
+          throw new Error('The spreadsheet is empty');
+        }
+
+        let addedCount = 0;
+        let updatedCount = 0;
+        let failedCount = 0;
+        const errorsList: { row: number; name: string; reason: string }[] = [];
+
+        // Sequentially save to avoid database lock issues in sqlite
+        for (let i = 0; i < json.length; i++) {
+          const row = json[i];
+          const rowNumber = i + 2; // Header is row 1, 0-indexed index i is row 2
+
+          const rowKeys = Object.keys(row);
+          const nameKey = rowKeys.find(k => {
+            const uk = k.trim().toUpperCase();
+            return uk === 'NAME OF THE MEMBERS INDUSTRIES' || uk === 'NAME OF THE MEMBERS INDUSTRIE' || uk === 'NAME' || uk === 'CLIENT NAME';
+          });
+          const addressKey = rowKeys.find(k => k.trim().toUpperCase() === 'ADDRESS');
+          const gstKey = rowKeys.find(k => k.trim().toUpperCase() === 'GST' || k.trim().toUpperCase() === 'GSTIN');
+          const stateKey = rowKeys.find(k => k.trim().toUpperCase() === 'STATE');
+          const stateCodeKey = rowKeys.find(k => k.trim().toUpperCase() === 'STATECODE' || k.trim().toUpperCase() === 'STATE CODE');
+
+          const nameVal = nameKey ? String(row[nameKey] || '').trim() : '';
+          const addressVal = addressKey ? String(row[addressKey] || '').trim() : '';
+          const gstinVal = gstKey ? String(row[gstKey] || '').trim() : '';
+          const stateVal = stateKey ? String(row[stateKey] || '').trim() : '';
+          const stateCodeVal = stateCodeKey ? String(row[stateCodeKey] || '').trim() : '';
+
+          if (!nameVal) {
+            failedCount++;
+            errorsList.push({
+              row: rowNumber,
+              name: 'N/A',
+              reason: 'Client Name is required'
+            });
+            continue;
+          }
+
+          if (!gstinVal) {
+            failedCount++;
+            errorsList.push({
+              row: rowNumber,
+              name: nameVal,
+              reason: 'GSTIN is required'
+            });
+            continue;
+          }
+
+          if (gstinVal.length !== 15) {
+            failedCount++;
+            errorsList.push({
+              row: rowNumber,
+              name: nameVal,
+              reason: `GSTIN must be exactly 15 characters (provided: ${gstinVal.length} characters)`
+            });
+            continue;
+          }
+
+          const state = stateVal || 'Maharashtra';
+          const stateCode = stateCodeVal || '27';
+
+          // Check if client with this gstin already exists in current list
+          const existingClient = clients.find(
+            c => c.gstin.trim().toUpperCase() === gstinVal.toUpperCase()
+          );
+
+          try {
+            if (existingClient) {
+              const updatedClient: Client = {
+                ...existingClient,
+                name: nameVal,
+                address: addressVal,
+                state: state,
+                stateCode: stateCode,
+              };
+
+              if (window.billingAPI?.saveClient) {
+                const res = await window.billingAPI.saveClient(updatedClient);
+                if (res && res.success) {
+                  updatedCount++;
+                } else {
+                  throw new Error('Database save returned success: false');
+                }
+              } else {
+                setClients(prev => prev.map(c => c.id === existingClient.id ? updatedClient : c));
+                updatedCount++;
+              }
+            } else {
+              const newClient: Client = {
+                id: crypto.randomUUID(),
+                name: nameVal,
+                address: addressVal,
+                gstin: gstinVal,
+                state: state,
+                stateCode: stateCode,
+                defaultRate: settings.defaultWaterRate,
+                isActive: true
+              };
+
+              if (window.billingAPI?.saveClient) {
+                const res = await window.billingAPI.saveClient(newClient);
+                if (res && res.success) {
+                  addedCount++;
+                } else {
+                  throw new Error('Database save returned success: false');
+                }
+              } else {
+                setClients(prev => [...prev, newClient]);
+                addedCount++;
+              }
+            }
+          } catch (err: any) {
+            failedCount++;
+            errorsList.push({
+              row: rowNumber,
+              name: nameVal,
+              reason: err.message || 'Failed to save to database'
+            });
+          }
+        }
+
+        setUploadSummary({
+          total: json.length,
+          added: addedCount,
+          updated: updatedCount,
+          failed: failedCount,
+          errors: errorsList
+        });
+        setShowUploadSummary(true);
+        loadClients();
+
+      } catch (err: any) {
+        console.error(err);
+        setErrorMsg(err.message || 'Failed to parse Excel file');
+      } finally {
+        setIsUploading(false);
+        e.target.value = '';
+      }
+    };
+
+    reader.onerror = () => {
+      setErrorMsg('Error reading file');
+      setIsUploading(false);
+      e.target.value = '';
+    };
+
+    reader.readAsArrayBuffer(file);
+  };
+
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -150,11 +347,36 @@ export function MasterDirectory() {
 
   const totalGst = (localSettings.cgstPercentage || 0) + (localSettings.sgstPercentage || 0);
 
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterStatus, pageSize]);
+
   const filteredClients = clients.filter(c => {
-    if (filterStatus === 'Active') return c.isActive;
-    if (filterStatus === 'Inactive') return !c.isActive;
-    return true;
+    const statusMatch = (() => {
+      if (filterStatus === 'Active') return c.isActive;
+      if (filterStatus === 'Inactive') return !c.isActive;
+      return true;
+    })();
+
+    const query = searchQuery.trim().toLowerCase();
+    const searchMatch = !query || 
+      (c.name && c.name.toLowerCase().includes(query)) ||
+      (c.gstin && c.gstin.toLowerCase().includes(query));
+
+    return statusMatch && searchMatch;
   });
+
+  const totalClients = filteredClients.length;
+  const totalPages = Math.ceil(totalClients / pageSize) || 1;
+  const hasNextPage = currentPage < totalPages;
+  const hasPreviousPage = currentPage > 1;
+
+  const paginatedClients = filteredClients.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
 
   return (
     <div className="h-full overflow-y-auto">
@@ -293,18 +515,55 @@ export function MasterDirectory() {
               <Card>
                 <CardHeader className="pb-3">
                   <div className="flex flex-row items-center justify-between w-full">
-                    <CardTitle className="text-sm">Master Directory</CardTitle>
-                    <select
-                      className="text-xs bg-muted border border-border rounded-md px-2 py-1 outline-none w-fit"
-                      value={filterStatus}
-                      onChange={(e) => setFilterStatus(e.target.value as any)}
-                    >
-                      <option value="Active">Active Clients</option>
-                      <option value="Inactive">Inactive Clients</option>
-                      <option value="All">All Clients</option>
-                    </select>
+                    <div className="flex items-center gap-4">
+                      <CardTitle className="text-sm">Master Directory</CardTitle>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search name or GSTIN..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="pl-8 pr-3 py-1.5 h-8 w-64 rounded-md border border-input bg-background text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors focus:border-ring"
+                        />
+                        <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        {searchQuery && (
+                          <button
+                            onClick={() => setSearchQuery('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted cursor-pointer transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                        {isUploading ? 'Uploading...' : 'Bulk Upload (.xlsx)'}
+                        <input
+                          type="file"
+                          accept=".xlsx, .xls"
+                          className="hidden"
+                          onChange={handleBulkUpload}
+                          disabled={isUploading}
+                        />
+                      </label>
+                      <select
+                        className="text-xs bg-muted border border-border rounded-md px-2 py-1 outline-none w-fit font-medium"
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value as any)}
+                      >
+                        <option value="Active">Active Clients</option>
+                        <option value="Inactive">Inactive Clients</option>
+                        <option value="All">All Clients</option>
+                      </select>
+                    </div>
                   </div>
                 </CardHeader>
+
+
                 <CardContent className="p-0">
                   <div className="overflow-auto max-h-[calc(100vh-280px)]">
                     <table className="w-full text-sm text-left">
@@ -318,7 +577,7 @@ export function MasterDirectory() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
-                        {filteredClients.map((client) => (
+                        {paginatedClients.map((client) => (
                           <tr
                             key={client.id}
                             className={`hover:bg-muted/30 transition-colors ${!client.isActive ? 'opacity-50' : ''}`}
@@ -357,7 +616,7 @@ export function MasterDirectory() {
                             </td>
                           </tr>
                         ))}
-                        {filteredClients.length === 0 && (
+                        {paginatedClients.length === 0 && (
                           <tr>
                             <td
                               colSpan={5}
@@ -368,10 +627,93 @@ export function MasterDirectory() {
                           </tr>
                         )}
                       </tbody>
+
                     </table>
                   </div>
                 </CardContent>
+                <CardFooter className="flex items-center justify-between border-t border-border px-5 py-4 bg-muted/20 text-xs text-muted-foreground select-none">
+                  <div className="flex items-center gap-5">
+                    <div>
+                      {totalClients > 0 ? (
+                        <>
+                          Showing <span className="font-semibold text-foreground">{(currentPage - 1) * pageSize + 1}</span> to{' '}
+                          <span className="font-semibold text-foreground">{Math.min(currentPage * pageSize, totalClients)}</span> of{' '}
+                          <span className="font-semibold text-foreground">{totalClients}</span> clients
+                        </>
+                      ) : (
+                        'No clients to show'
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 border-l border-border pl-5">
+                      <span>Rows per page:</span>
+                      <select
+                        className="bg-background border border-border rounded px-1.5 py-0.5 outline-none font-medium text-foreground text-[11px] cursor-pointer"
+                        value={pageSize}
+                        onChange={(e) => {
+                          setPageSize(Number(e.target.value));
+                        }}
+                      >
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-[11px]"
+                      disabled={!hasPreviousPage}
+                      onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((pg) => {
+                        const isNearCurrent = Math.abs(pg - currentPage) <= 1;
+                        const isFirstOrLast = pg === 1 || pg === totalPages;
+                        
+                        if (!isNearCurrent && !isFirstOrLast) {
+                          if (pg === 2 && currentPage > 3) {
+                            return <span key={pg} className="px-1 py-0.5 text-[10px]">...</span>;
+                          }
+                          if (pg === totalPages - 1 && currentPage < totalPages - 2) {
+                            return <span key={pg} className="px-1 py-0.5 text-[10px]">...</span>;
+                          }
+                          return null;
+                        }
+
+                        return (
+                          <button
+                            key={pg}
+                            onClick={() => setCurrentPage(pg)}
+                            className={`h-7 w-7 rounded-md text-[11px] font-semibold transition-all ${
+                              currentPage === pg
+                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+                            }`}
+                          >
+                            {pg}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-[11px]"
+                      disabled={!hasNextPage}
+                      onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </CardFooter>
               </Card>
+
             </div>
           </div>
         )}
@@ -582,7 +924,79 @@ export function MasterDirectory() {
             </div>
           </div>
         )}
+
+        {showUploadSummary && uploadSummary && (
+          <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <Card className="w-full max-w-xl shadow-2xl relative animate-in zoom-in-95 duration-200">
+              <CardHeader className="relative flex flex-row items-center border-b bg-muted/50 pb-4 pl-16">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowUploadSummary(false)}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 h-10 w-10 p-0 rounded-full border border-border bg-background text-muted-foreground hover:bg-destructive hover:text-destructive-foreground shadow-sm transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+                <CardTitle className="text-base font-semibold">Bulk Upload Summary</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-4">
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  <div className="p-3 bg-muted rounded-lg">
+                    <div className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Total Rows</div>
+                    <div className="text-xl font-bold text-foreground mt-1">{uploadSummary.total}</div>
+                  </div>
+                  <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg border border-emerald-500/20">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider">Added</div>
+                    <div className="text-xl font-bold mt-1">{uploadSummary.added}</div>
+                  </div>
+                  <div className="p-3 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg border border-blue-500/20">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider">Updated</div>
+                    <div className="text-xl font-bold mt-1">{uploadSummary.updated}</div>
+                  </div>
+                  <div className="p-3 bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg border border-red-500/20">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider">Failed</div>
+                    <div className="text-xl font-bold mt-1">{uploadSummary.failed}</div>
+                  </div>
+                </div>
+
+                {uploadSummary.errors.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                      Detailed Warnings & Errors ({uploadSummary.errors.length})
+                    </div>
+                    <div className="max-h-48 overflow-y-auto border border-border rounded-md divide-y divide-border text-xs bg-muted/20">
+                      {uploadSummary.errors.map((err, idx) => (
+                        <div key={idx} className="p-2.5 flex items-start gap-2 hover:bg-muted/30 transition-colors">
+                          <span className="font-mono bg-muted border border-border px-1.5 py-0.5 rounded text-[10px] font-bold text-muted-foreground">
+                            Row {err.row}
+                          </span>
+                          <div className="flex-1">
+                            <span className="font-semibold text-foreground mr-1.5">{err.name}:</span>
+                            <span className="text-muted-foreground">{err.reason}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {uploadSummary.failed === 0 && (
+                  <div className="p-3 text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-md border border-emerald-500/25 font-medium">
+                    🎉 All rows processed successfully with no errors or skipped items.
+                  </div>
+                )}
+              </CardContent>
+              <div className="p-4 border-t bg-muted/30 flex justify-end">
+                <Button onClick={() => setShowUploadSummary(false)} className="px-5">
+                  Close Summary
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
