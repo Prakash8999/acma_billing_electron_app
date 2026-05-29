@@ -127,17 +127,7 @@ const createTables = async () => {
     )
   `);
 
-  // Run migrations to add column if database already exists
-  try {
-    await run('ALTER TABLE invoices ADD COLUMN additionalCharges REAL DEFAULT 0');
-  } catch (e) {
-    // Ignore error if column already exists
-  }
-  try {
-    await run('ALTER TABLE invoice_items ADD COLUMN additionalCharges REAL DEFAULT 0');
-  } catch (e) {
-    // Ignore error if column already exists
-  }
+
 
   await run(`
     CREATE TABLE IF NOT EXISTS receipts (
