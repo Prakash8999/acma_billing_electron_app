@@ -16,6 +16,7 @@ export interface InvoiceItem {
   waterConsumption: number;
   rate: number;
   extraCharges: number;
+  additionalCharges: number;
   baseCharge: number;
   taxableAmount: number;
 }
@@ -29,6 +30,7 @@ export interface Invoice {
   totals: {
     baseCharge: number;
     extraCharges: number;
+    additionalCharges: number;
     amountBeforeTax: number;
     cgstAmount: number;
     sgstAmount: number;

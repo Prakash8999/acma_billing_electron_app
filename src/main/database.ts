@@ -97,6 +97,7 @@ const createTables = async () => {
       status TEXT,
       baseCharge REAL,
       extraCharges REAL,
+      additionalCharges REAL DEFAULT 0,
       amountBeforeTax REAL,
       cgstAmount REAL,
       sgstAmount REAL,
@@ -119,11 +120,24 @@ const createTables = async () => {
       waterConsumption REAL,
       rate REAL,
       extraCharges REAL,
+      additionalCharges REAL DEFAULT 0,
       baseCharge REAL,
       taxableAmount REAL,
       FOREIGN KEY (invoiceId) REFERENCES invoices (id) ON DELETE CASCADE
     )
   `);
+
+  // Run migrations to add column if database already exists
+  try {
+    await run('ALTER TABLE invoices ADD COLUMN additionalCharges REAL DEFAULT 0');
+  } catch (e) {
+    // Ignore error if column already exists
+  }
+  try {
+    await run('ALTER TABLE invoice_items ADD COLUMN additionalCharges REAL DEFAULT 0');
+  } catch (e) {
+    // Ignore error if column already exists
+  }
 
   await run(`
     CREATE TABLE IF NOT EXISTS receipts (
@@ -220,6 +234,7 @@ export const fetchInvoices = async () => {
     inv.totals = {
       baseCharge: inv.baseCharge,
       extraCharges: inv.extraCharges,
+      additionalCharges: inv.additionalCharges || 0,
       amountBeforeTax: inv.amountBeforeTax,
       cgstAmount: inv.cgstAmount,
       sgstAmount: inv.sgstAmount,
@@ -250,6 +265,7 @@ export const fetchInvoices = async () => {
     // Clean up flat properties
     delete inv.baseCharge;
     delete inv.extraCharges;
+    delete inv.additionalCharges;
     delete inv.amountBeforeTax;
     delete inv.cgstAmount;
     delete inv.sgstAmount;
@@ -271,13 +287,13 @@ export const saveInvoice = async (invoice: any) => {
       await run(`
         UPDATE invoices SET
           invoiceNo = ?, date = ?, clientId = ?, status = ?,
-          baseCharge = ?, extraCharges = ?, amountBeforeTax = ?, cgstAmount = ?,
+          baseCharge = ?, extraCharges = ?, additionalCharges = ?, amountBeforeTax = ?, cgstAmount = ?,
           sgstAmount = ?, totalTaxAmount = ?, amountAfterTax = ?, previousOutstanding = ?,
           ifPaidAfterDate = ?, pleasePayRs = ?, settingsSnapshot = ?
         WHERE id = ?
       `, [
         invoice.invoiceNo, invoice.date, invoice.clientId, invoice.status,
-        invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.amountBeforeTax,
+        invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.additionalCharges || 0, invoice.totals.amountBeforeTax,
         invoice.totals.cgstAmount, invoice.totals.sgstAmount, invoice.totals.totalTaxAmount,
         invoice.totals.amountAfterTax, invoice.totals.previousOutstanding,
         invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs,
@@ -289,13 +305,13 @@ export const saveInvoice = async (invoice: any) => {
       await run(`
         INSERT INTO invoices (
           id, invoiceNo, date, clientId, status,
-          baseCharge, extraCharges, amountBeforeTax, cgstAmount,
+          baseCharge, extraCharges, additionalCharges, amountBeforeTax, cgstAmount,
           sgstAmount, totalTaxAmount, amountAfterTax, previousOutstanding,
           ifPaidAfterDate, pleasePayRs, settingsSnapshot
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         invoice.id, invoice.invoiceNo, invoice.date, invoice.clientId, invoice.status,
-        invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.amountBeforeTax,
+        invoice.totals.baseCharge, invoice.totals.extraCharges, invoice.totals.additionalCharges || 0, invoice.totals.amountBeforeTax,
         invoice.totals.cgstAmount, invoice.totals.sgstAmount, invoice.totals.totalTaxAmount,
         invoice.totals.amountAfterTax, invoice.totals.previousOutstanding,
         invoice.dpc.ifPaidAfterDate, invoice.dpc.pleasePayRs,
@@ -305,9 +321,9 @@ export const saveInvoice = async (invoice: any) => {
 
     for (const item of invoice.items) {
       await run(`
-        INSERT INTO invoice_items (id, invoiceId, description, sacCode, waterConsumption, rate, extraCharges, baseCharge, taxableAmount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [item.id, invoice.id, item.description, item.sacCode, item.waterConsumption, item.rate, item.extraCharges, item.baseCharge, item.taxableAmount]);
+        INSERT INTO invoice_items (id, invoiceId, description, sacCode, waterConsumption, rate, extraCharges, additionalCharges, baseCharge, taxableAmount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [item.id, invoice.id, item.description, item.sacCode, item.waterConsumption, item.rate, item.extraCharges, item.additionalCharges || 0, item.baseCharge, item.taxableAmount]);
     }
 
     await run('COMMIT');

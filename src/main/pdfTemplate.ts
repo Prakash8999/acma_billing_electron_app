@@ -12,76 +12,139 @@ function formatDate(dateStr: string): string {
   return dateStr
 }
 
+function splitTextIntoTwoLines(text: string, maxCharsOnFirstLine: number): [string, string] {
+  if (!text) return ['', '']
+  if (text.length <= maxCharsOnFirstLine) {
+    return [text, '']
+  }
+  
+  // Find the last space before maxCharsOnFirstLine
+  let splitIndex = text.lastIndexOf(' ', maxCharsOnFirstLine)
+  if (splitIndex === -1 || splitIndex < maxCharsOnFirstLine * 0.5) {
+    // If no space, or space is too far back, just split at maxCharsOnFirstLine
+    splitIndex = maxCharsOnFirstLine
+  }
+  
+  const firstLine = text.substring(0, splitIndex).trim()
+  const secondLine = text.substring(splitIndex).trim()
+  return [firstLine, secondLine]
+}
+
 export function generateInvoiceHTML(data: any): string {
   const { invoiceData, client, settings, amountInWords } = data
   const item = invoiceData.items[0]
 
+  const [nameLine1, nameLine2] = splitTextIntoTwoLines(client.name || '', 30)
+  const [addrLine1, addrLine2] = splitTextIntoTwoLines(client.address || '', 30)
+  const [wordsLine1, wordsLine2] = splitTextIntoTwoLines(amountInWords || '', 28)
+
   const renderServiceRows = () => {
+    const descLines = item?.description ? item.description.split('\n') : []
+    if (descLines.length === 0) {
+      descLines.push('Effluent Treatment Charges for the')
+      descLines.push('month of ')
+    } else if (descLines.length === 1) {
+      if (!descLines[0].toLowerCase().includes('month')) {
+        descLines.push('month of ')
+      }
+    }
+
+    // Ensure we have at least 4 lines
+    while (descLines.length < 4) {
+      descLines.push('')
+    }
+
+    // Handle additional charges in the description if present
+    if (item?.additionalCharges > 0) {
+      const hasAddLine = descLines.some((l, idx) => idx > 0 && l.trim() !== '' && !l.toLowerCase().includes('extra'))
+      if (!hasAddLine) {
+        if (descLines[1] === '') {
+          descLines[1] = 'Additional Charges'
+        } else if (descLines[2] === '') {
+          descLines[2] = 'Additional Charges'
+        } else if (descLines[3] === '') {
+          descLines[3] = 'Additional Charges'
+        } else {
+          descLines.push('Additional Charges')
+        }
+      }
+    }
+
+    // Handle extra charges in the description if present
+    if (item?.extraCharges > 0 && !descLines.some((l) => l.toLowerCase().includes('extra'))) {
+      if (descLines[2] === '') {
+        descLines[2] = 'Extra Misc Charges'
+      } else if (descLines[3] === '') {
+        descLines[3] = 'Extra Misc Charges'
+      } else {
+        descLines.push('Extra Misc Charges')
+      }
+    }
+
+    // Ensure we still have exactly 4 lines to preserve grid height
+    while (descLines.length < 4) {
+      descLines.push('')
+    }
+    if (descLines.length > 4) {
+      descLines.length = 4
+    }
+
     const rows: string[] = []
-    const descLines = item?.description
-      ? item.description.split('\n')
-      : ['Effluent Treatment Charges for the']
 
-    for (let i = 0; i < Math.max(descLines.length, 1); i++) {
-      const isFirst = i === 0
-      const isSecondWithExtra = i === 1 && item?.extraCharges > 0
+    const amountLines = ['', '', '', '']
+    amountLines[0] = item?.baseCharge ? formatRupees(item.baseCharge) : ''
 
-      let sac = ''
-      let consumption = ''
-      let rateStr = ''
-      let amountStr = ''
+    const addLineIndex = descLines.findIndex((l, idx) => idx > 0 && l.trim() !== '' && !l.toLowerCase().includes('extra'))
+    if (addLineIndex !== -1 && item?.additionalCharges > 0) {
+      amountLines[addLineIndex] = formatRupees(item.additionalCharges)
+    }
 
-      if (isFirst) {
-        sac = item?.sacCode || ''
-        consumption = item?.waterConsumption ? `${item.waterConsumption} M³` : ''
-        rateStr = item?.rate ? formatRupees(item.rate) : ''
-        amountStr = item?.baseCharge ? formatRupees(item.baseCharge) : ''
-      } else if (isSecondWithExtra || (i === 1 && !isFirst)) {
-        amountStr = item?.extraCharges ? formatRupees(item.extraCharges) : ''
+    const extraLineIndex = descLines.findIndex((l) => l.toLowerCase().includes('extra'))
+    if (extraLineIndex !== -1 && item?.extraCharges > 0) {
+      amountLines[extraLineIndex] = formatRupees(item.extraCharges)
+    }
+
+    for (let i = 0; i < 4; i++) {
+      let extraCols = ''
+      if (i === 0) {
+        const sac = item?.sacCode || ''
+        const consumption = item?.waterConsumption ? `${item.waterConsumption} M³` : ''
+        const rateStr = item?.rate ? formatRupees(item.rate) : ''
+
+        extraCols = `
+          <td rowspan="4" style="border-bottom:1px solid #000;border-right:1px solid #000;padding:0;vertical-align:top;font-size:12px;width:12%;text-align:center;">
+            <div style="height:45px;line-height:45px;text-align:center;">${sac || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+          </td>
+          <td rowspan="4" style="border-bottom:1px solid #000;border-right:1px solid #000;padding:0;vertical-align:top;font-size:12px;width:16%;text-align:center;">
+            <div style="height:45px;line-height:45px;text-align:center;">${consumption || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+          </td>
+          <td rowspan="4" style="border-bottom:1px solid #000;border-right:1px solid #000;padding:0;vertical-align:top;font-size:12px;width:14%;text-align:right;">
+            <div style="height:45px;line-height:45px;text-align:right;padding-right:7px;">${rateStr || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+            <div style="height:45px;line-height:45px;">&nbsp;</div>
+          </td>
+          <td rowspan="4" style="border-bottom:1px solid #000;padding:0;vertical-align:top;font-size:12px;width:20%;text-align:right;">
+            <div style="height:45px;line-height:45px;text-align:right;padding-right:7px;font-family:monospace;">${amountLines[0] || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;text-align:right;padding-right:7px;font-family:monospace;">${amountLines[1] || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;text-align:right;padding-right:7px;font-family:monospace;">${amountLines[2] || '&nbsp;'}</div>
+            <div style="height:45px;line-height:45px;text-align:right;padding-right:7px;font-family:monospace;">${amountLines[3] || '&nbsp;'}</div>
+          </td>
+        `
       }
 
       rows.push(`
         <tr>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px 7px;vertical-align:top;font-size:12px;height:32px;">
-            ${descLines[i] || ''}
+          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:0 7px;line-height:45px;height:45px;vertical-align:middle;font-size:12px;width:38%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            ${descLines[i] || '&nbsp;'}
           </td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;text-align:center;vertical-align:top;font-size:12px;">
-            ${sac}
-          </td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;text-align:center;vertical-align:top;font-size:12px;">
-            ${consumption}
-          </td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;text-align:right;vertical-align:top;font-size:12px;">
-            ${rateStr}
-          </td>
-          <td style="border-bottom:1px solid #000;padding:5px;text-align:right;vertical-align:top;font-size:12px;">
-            ${amountStr}
-          </td>
-        </tr>
-      `)
-    }
-
-    if (descLines.length <= 1 && item?.extraCharges > 0) {
-      rows.push(`
-        <tr>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px 7px;vertical-align:top;font-size:12px;height:32px;">Extra Misc Charges</td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;padding:5px;text-align:right;font-size:12px;">${formatRupees(item.extraCharges)}</td>
-        </tr>
-      `)
-    }
-
-    const currentCount = rows.length
-    for (let i = currentCount; i < 4; i++) {
-      rows.push(`
-        <tr>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px 7px;height:32px;"></td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px;"></td>
-          <td style="border-bottom:1px solid #000;padding:5px;"></td>
+          ${extraCols}
         </tr>
       `)
     }
@@ -127,36 +190,32 @@ export function generateInvoiceHTML(data: any): string {
 
   <!-- ===== ROW 1: HEADER ===== -->
   <tr>
-    <td colspan="5" style="border-bottom:2px solid #000;padding:10px 12px 8px 12px;position:relative;">
-      <!-- Copy type box — top right -->
-      <div style="position:absolute;top:10px;right:10px;border:1px solid #000;font-size:8px;line-height:1.5;min-width:130px;">
-        <table style="border-collapse:collapse;width:100%;">
-          <tr><td style="border:1px solid #000;padding:2px 5px;"><span style="display:inline-block;width:8px;height:8px;border:1px solid #000;margin-right:3px;text-align:center;font-size:7px;line-height:8px;font-weight:bold;">✓</span>Original For Recipient</td></tr>
-          <tr><td style="border:1px solid #000;padding:2px 5px;"><span style="display:inline-block;width:8px;height:8px;border:1px solid #000;margin-right:3px;"></span>Duplicate For Recipient</td></tr>
-          <tr><td style="border:1px solid #000;padding:2px 5px;"><span style="display:inline-block;width:8px;height:8px;border:1px solid #000;margin-right:3px;"></span>Triplicate For Supplier</td></tr>
-          <tr><td style="border:1px solid #000;padding:2px 5px;"><span style="display:inline-block;width:8px;height:8px;border:1px solid #000;margin-right:3px;"></span>Extra Copy</td></tr>
-        </table>
-      </div>
-      <!-- Header text -->
-      <div style="text-align:center;padding-right:140px;">
-        <div style="font-size:26px;font-weight:bold;letter-spacing:0.5px;line-height:1.2;">ACMA CETP CO-OP. SOCIETY LTD.</div>
-        <div style="font-size:10px;font-weight:bold;margin-top:3px;">REGD. NO. TNA/ULR/GNL/(0)/359/94-95 /1994</div>
-        <div style="font-size:10px;font-weight:bold;margin-top:2px;">&#9632; SHED NO. W-30, M.I.D.C., CHEMICAL ZONE, AMBERNATH (WEST) &#9632;</div>
-        <div style="font-size:10px;margin-top:2px;">Tel. No: ${settings.officialPhone} | Cell No. ${settings.officialMobile} | E-Mail : ${settings.officialEmail}</div>
-      </div>
+    <td colspan="5" style="border-bottom:2px solid #000;padding:10px 12px 8px 12px;text-align:center;">
+      <div style="font-size:26px;font-weight:bold;letter-spacing:0.5px;line-height:1.2;">ACMA CETP CO-OP. SOCIETY LTD.</div>
+      <div style="font-size:10px;font-weight:bold;margin-top:3px;">REGD. NO. TNA/ULR/GNL/(0)/359/94-95 /1994</div>
+      <div style="font-size:10px;font-weight:bold;margin-top:2px;">&#9632; SHED NO. W-30, M.I.D.C., CHEMICAL ZONE, AMBERNATH (WEST) &#9632;</div>
+      <div style="font-size:10px;margin-top:2px;">Tel. No: ${settings.officialPhone} | Cell No. ${settings.officialMobile} | E-Mail : ${settings.officialEmail}</div>
     </td>
   </tr>
 
   <!-- ===== ROW 2: TAX INVOICE ===== -->
   <tr>
-    <td colspan="5" style="border-bottom:2px solid #000;text-align:center;padding:6px;font-size:17px;font-weight:bold;letter-spacing:3px;">
+    <td colspan="5" style="border-bottom:2px solid #000;text-align:center;padding:6px;font-size:17px;font-weight:bold;letter-spacing:3px;position:relative;height:55px;">
       TAX INVOICE
+      <div style="position:absolute;top:2px;right:10px;border:1px solid #000;font-size:8px;line-height:1.2;min-width:130px;text-align:left;font-weight:normal;letter-spacing:normal;">
+        <table style="border-collapse:collapse;width:100%;">
+          <tr><td style="border:1px solid #000;padding:1px 3px;"><span style="display:inline-block;width:7px;height:7px;border:1px solid #000;margin-right:3px;text-align:center;font-size:6px;line-height:7px;font-weight:bold;vertical-align:middle;margin-top:-2px;">✓</span>Original For Recipient</td></tr>
+          <tr><td style="border:1px solid #000;padding:1px 3px;"><span style="display:inline-block;width:7px;height:7px;border:1px solid #000;margin-right:3px;vertical-align:middle;margin-top:-2px;"></span>Duplicate For Recipient</td></tr>
+          <tr><td style="border:1px solid #000;padding:1px 3px;"><span style="display:inline-block;width:7px;height:7px;border:1px solid #000;margin-right:3px;vertical-align:middle;margin-top:-2px;"></span>Triplicate For Supplier</td></tr>
+          <tr><td style="border:1px solid #000;padding:1px 3px;"><span style="display:inline-block;width:7px;height:7px;border:1px solid #000;margin-right:3px;vertical-align:middle;margin-top:-2px;"></span>Extra Copy</td></tr>
+        </table>
+      </div>
     </td>
   </tr>
 
   <!-- ===== ROW 3: GSTIN / STATE ===== -->
   <tr>
-    <td colspan="3" style="border-bottom:2px solid #000;border-right:2px solid #000;padding:5px 8px;vertical-align:top;width:50%;">
+    <td colspan="2" style="border-bottom:2px solid #000;border-right:2px solid #000;padding:5px 8px;vertical-align:top;width:50%;">
       <table style="width:100%;border-collapse:collapse;">
         <tr>
           <td style="width:85px;font-weight:bold;padding:2px 0;font-size:12px;white-space:nowrap;">GSTIN No.</td>
@@ -172,7 +231,7 @@ export function generateInvoiceHTML(data: any): string {
         </tr>
       </table>
     </td>
-    <td colspan="2" style="border-bottom:2px solid #000;padding:5px 8px;vertical-align:top;width:50%;">
+    <td colspan="3" style="border-bottom:2px solid #000;padding:5px 8px;vertical-align:top;width:50%;">
       <table style="width:100%;border-collapse:collapse;">
         <tr>
           <td style="width:90px;font-weight:bold;padding:2px 0;font-size:12px;">State</td>
@@ -199,31 +258,42 @@ export function generateInvoiceHTML(data: any): string {
 
   <!-- ===== ROW 5: RECEIVER DETAILS ===== -->
   <tr>
-    <td colspan="3" style="border-bottom:2px solid #000;border-right:2px solid #000;padding:6px 8px;vertical-align:top;width:50%;min-height:80px;">
-      <table style="width:100%;border-collapse:collapse;">
-        <tr>
-          <td style="width:58px;font-weight:bold;font-size:12px;padding:3px 0;vertical-align:top;">Name</td>
-          <td style="font-size:13px;font-weight:bold;padding:3px 0;vertical-align:top;">:&nbsp; ${client.name || '<span class="underline-blank"></span>'}</td>
-        </tr>
-        <tr>
-          <td style="font-weight:bold;font-size:12px;padding:3px 0;vertical-align:top;">Address</td>
-          <td style="font-size:12px;padding:3px 0;vertical-align:top;line-height:1.5;">:&nbsp; ${client.address || '<span class="underline-blank" style="min-width:160px;"></span>'}</td>
-        </tr>
-      </table>
+    <td colspan="2" style="border-bottom:2px solid #000;border-right:2px solid #000;padding:8px;vertical-align:top;width:50%;">
+      <div style="display: flex; align-items: flex-end; height: 24px; line-height: 18px;">
+        <span style="font-weight: bold; padding-right: 5px; white-space: nowrap;">Name &nbsp;&nbsp;:</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; font-weight: bold; font-size: 13px; padding-left: 5px; padding-bottom: 1px;">
+          ${nameLine1 || '&nbsp;'}
+        </div>
+      </div>
+      <div style="border-bottom: 1px solid #000; font-weight: bold; font-size: 13px; padding-left: 5px; height: 24px; line-height: 24px; width: 100%;">
+        ${nameLine2 || '&nbsp;'}
+      </div>
+
+      <div style="height: 8px;"></div>
+
+      <div style="display: flex; align-items: flex-end; height: 24px; line-height: 18px;">
+        <span style="font-weight: bold; padding-right: 5px; white-space: nowrap;">Address :</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; padding-left: 5px; padding-bottom: 1px;">
+          ${addrLine1 || '&nbsp;'}
+        </div>
+      </div>
+      <div style="border-bottom: 1px solid #000; padding-left: 5px; height: 24px; line-height: 24px; width: 100%;">
+        ${addrLine2 || '&nbsp;'}
+      </div>
     </td>
-    <td colspan="2" style="border-bottom:2px solid #000;padding:6px 8px;vertical-align:top;width:50%;">
-      <table style="width:100%;border-collapse:collapse;">
+    <td colspan="3" style="border-bottom:2px solid #000;padding:8px;vertical-align:top;width:50%;">
+      <table style="width:100%;border-collapse:collapse;height:100px;">
         <tr>
-          <td style="width:90px;font-weight:bold;font-size:12px;padding:3px 0;">State</td>
-          <td style="font-size:12px;padding:3px 0;">:&nbsp; ${client.state || 'Maharashtra'}</td>
+          <td style="width:90px;font-weight:bold;font-size:12px;padding:6px 0;vertical-align:middle;">State</td>
+          <td style="font-size:12px;padding:6px 0;vertical-align:middle;">:&nbsp; ${client.state || 'Maharashtra'}</td>
         </tr>
         <tr>
-          <td style="font-weight:bold;font-size:12px;padding:3px 0;">State Code</td>
-          <td style="font-size:12px;padding:3px 0;">:&nbsp; ${client.stateCode || '27'}</td>
+          <td style="font-weight:bold;font-size:12px;padding:6px 0;vertical-align:middle;">State Code</td>
+          <td style="font-size:12px;padding:6px 0;vertical-align:middle;">:&nbsp; ${client.stateCode || '27'}</td>
         </tr>
         <tr>
-          <td style="font-weight:bold;font-size:12px;padding:3px 0;">GSTIN No.</td>
-          <td style="font-size:12px;font-weight:bold;font-family:monospace;padding:3px 0;white-space:nowrap;">:&nbsp; ${client.gstin || ''}</td>
+          <td style="font-weight:bold;font-size:12px;padding:6px 0;vertical-align:middle;">GSTIN No.</td>
+          <td style="font-size:12px;font-weight:bold;font-family:monospace;padding:6px 0;vertical-align:middle;white-space:nowrap;">:&nbsp; ${client.gstin || ''}</td>
         </tr>
       </table>
     </td>
@@ -231,10 +301,10 @@ export function generateInvoiceHTML(data: any): string {
 
   <!-- ===== ROW 6: SERVICE TABLE HEADER ===== -->
   <tr style="background:#f0f0f0;font-weight:bold;font-size:11px;text-align:center;">
-    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:42%;">Description of Services</td>
-    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:11%;">SAC Code</td>
-    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:15%;">WATER<br>CONSUMPTION<br><span style="font-size:9px;font-weight:normal;">[ M³ ]</span></td>
-    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:12%;">RATE<br><span style="font-size:9px;font-weight:normal;">[ Rs/M ]</span></td>
+    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:38%;">Description of Services</td>
+    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:12%;">SAC Code</td>
+    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:16%;">WATER<br>CONSUMPTION<br><span style="font-size:9px;font-weight:normal;">[ M³ ]</span></td>
+    <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:6px 5px;width:14%;">RATE<br><span style="font-size:9px;font-weight:normal;">[ Rs/M³ ]</span></td>
     <td style="border-bottom:1px solid #000;padding:6px 5px;width:20%;">TAXABLE<br>AMOUNT<br><span style="font-size:9px;font-weight:normal;">[ Rs. ]</span></td>
   </tr>
 
@@ -244,33 +314,53 @@ export function generateInvoiceHTML(data: any): string {
   <!-- ===== ROW 8: TOTALS SECTION ===== -->
   <tr>
     <!-- Left: invoice value text -->
-    <td colspan="3" style="border-top:2px solid #000;border-right:2px solid #000;padding:8px 10px;vertical-align:top;">
+    <td colspan="3" style="border-top:2px solid #000;border-right:2px solid #000;padding:12px 10px;vertical-align:top;width:66%;">
       <!-- Total in figure -->
-      <div style="margin-bottom:6px;font-size:12px;">
-        <span style="font-weight:bold;">Total Invoice Value (In Figure) Rs.</span>
-        <span style="border-bottom:1px solid #000;display:inline-block;min-width:80px;margin-left:6px;font-family:monospace;font-weight:bold;font-size:13px;vertical-align:bottom;">${invoiceData.totals.amountAfterTax ? formatRupees(invoiceData.totals.amountAfterTax) : ''}</span>
+      <div style="display: flex; align-items: flex-end; margin-bottom: 8px;">
+        <span style="font-weight: bold; font-size: 12px; white-space: nowrap; padding-right: 4px;">Total Invoice Value (In Figure) Rs.</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; font-family: monospace; font-weight: bold; font-size: 13px; padding-left: 5px; padding-bottom: 1px;">
+          ${invoiceData.totals.amountAfterTax ? formatRupees(invoiceData.totals.amountAfterTax) : ''}
+        </div>
       </div>
       <!-- Total in words -->
-      <div style="margin-bottom:10px;font-size:12px;">
-        <span style="font-weight:bold;">Total Invoice Value (In words) Rupees.</span>
-        <span style="border-bottom:1px solid #000;display:inline-block;min-width:100px;margin-left:4px;font-style:italic;font-weight:bold;vertical-align:bottom;font-size:11px;">${amountInWords || ''}</span>
+      <div style="display: flex; align-items: flex-end; height: 20px; line-height: 18px;">
+        <span style="font-weight: bold; white-space: nowrap; padding-right: 5px;">Total Invoice Value (In words) Rupees.</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; font-style: italic; font-weight: bold; font-size: 11px; padding-left: 5px; padding-bottom: 1px;">
+          ${wordsLine1 || '&nbsp;'}
+        </div>
       </div>
-      <!-- Divider -->
-      <div style="border-top:1px solid #ccc;padding-top:6px;margin-bottom:6px;font-size:12px;">
-        <span style="font-weight:bold;">DPC :</span> If Paid after
-        <span style="border-bottom:1px solid #000;display:inline-block;min-width:70px;margin:0 3px;vertical-align:bottom;">${invoiceData.dpc?.ifPaidAfterDate ? formatDate(invoiceData.dpc.ifPaidAfterDate) : ''}</span>
-        Please Pay Rs.
-        <span style="border-bottom:1px solid #000;display:inline-block;min-width:60px;margin-left:3px;font-family:monospace;vertical-align:bottom;">${invoiceData.dpc?.pleasePayRs ? formatRupees(invoiceData.dpc.pleasePayRs) : ''}</span>
+      <div style="border-bottom: 1px solid #000; font-style: italic; font-weight: bold; font-size: 11px; padding-left: 5px; height: 20px; line-height: 20px; width: 100%; margin-bottom: 12px;">
+        ${wordsLine2 || '&nbsp;'}
       </div>
-      <!-- Previous outstanding -->
-      <div style="border-top:1px solid #ccc;padding-top:6px;font-size:12px;">
-        <span style="font-weight:bold;">Previous Outstanding Amount Rs.</span>
-        <span style="border-bottom:1px solid #000;display:inline-block;min-width:70px;margin-left:6px;font-family:monospace;vertical-align:bottom;">${invoiceData.totals.previousOutstanding ? formatRupees(invoiceData.totals.previousOutstanding) : ''}</span>
+      <!-- DPC : If Paid after -->
+      <div style="display: flex; align-items: flex-end; margin-bottom: 8px; border-top: 1px solid #000; padding-top: 8px;">
+        <span style="font-weight: bold; font-size: 12px; white-space: nowrap; padding-right: 4px;">DPC : If Paid after</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; padding-left: 5px; padding-bottom: 1px;">
+          ${invoiceData.dpc?.ifPaidAfterDate ? formatDate(invoiceData.dpc.ifPaidAfterDate) : ''}
+        </div>
+      </div>
+      <!-- Please Pay Rs -->
+      <div style="display: flex; align-items: flex-end; margin-bottom: 8px;">
+        <span style="font-weight: bold; font-size: 12px; white-space: nowrap; padding-right: 4px;">Please Pay Rs.</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; font-family: monospace; padding-left: 5px; padding-bottom: 1px;">
+          ${invoiceData.dpc?.pleasePayRs ? formatRupees(invoiceData.dpc.pleasePayRs) : ''}
+        </div>
+      </div>
+      <!-- Empty Spacer Line -->
+      <div style="display: flex; align-items: flex-end; margin-bottom: 12px; height: 18px;">
+        <div style="flex-grow: 1; border-bottom: 1px solid #000;"></div>
+      </div>
+      <!-- Previous Outstanding -->
+      <div style="display: flex; align-items: flex-end; margin-bottom: 4px; border-top: 1px solid #000; padding-top: 8px;">
+        <span style="font-weight: bold; font-size: 12px; white-space: nowrap; padding-right: 4px;">Previous Outstanding Amount Rs.</span>
+        <div style="flex-grow: 1; border-bottom: 1px solid #000; font-family: monospace; padding-left: 5px; padding-bottom: 1px;">
+          ${invoiceData.totals.previousOutstanding ? formatRupees(invoiceData.totals.previousOutstanding) : ''}
+        </div>
       </div>
     </td>
 
     <!-- Right: computation table -->
-    <td colspan="2" style="border-top:2px solid #000;padding:0;vertical-align:top;">
+    <td colspan="2" style="border-top:2px solid #000;padding:0;vertical-align:top;width:34%;">
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         <tr>
           <td style="border-bottom:1px solid #000;border-right:1px solid #000;padding:5px 7px;font-weight:bold;width:63%;">Total Amount Before Tax</td>
@@ -303,7 +393,7 @@ export function generateInvoiceHTML(data: any): string {
   <!-- ===== ROW 9: FOOTER — BANK / SIGNATURE ===== -->
   <tr>
     <!-- Bank Details -->
-    <td colspan="2" style="border-top:2px solid #000;border-right:1px solid #000;padding:8px 10px;vertical-align:top;width:38%;">
+    <td colspan="2" style="border-top:2px solid #000;border-right:2px solid #000;padding:8px 10px;vertical-align:top;width:50%;">
       <div style="font-weight:bold;font-size:12px;margin-bottom:3px;">Bank Details :</div>
       <div style="font-weight:bold;font-size:12px;margin-bottom:2px;">AMBARNATH JAI-HIND CO-OP. BANK LTD.</div>
       <div style="font-size:11px;line-height:1.6;">
@@ -314,16 +404,15 @@ export function generateInvoiceHTML(data: any): string {
       </div>
     </td>
     <!-- Receiver Signature -->
-    <td style="border-top:2px solid #000;border-right:1px solid #000;padding:10px 8px;text-align:center;vertical-align:bottom;width:24%;">
+    <td colspan="1" style="border-top:2px solid #000;border-right:2px solid #000;padding:10px 8px;text-align:center;vertical-align:bottom;width:16%;">
       <div style="border-top:1px solid #000;width:80%;margin:0 auto 4px auto;"></div>
       <div style="font-size:11px;line-height:1.4;">Receiver Signature<br>with Rubber Stamp</div>
     </td>
     <!-- Authorised Signature -->
-    <td colspan="2" style="border-top:2px solid #000;padding:8px 10px;text-align:center;vertical-align:top;width:38%;position:relative;min-height:100px;">
+    <td colspan="2" style="border-top:2px solid #000;padding:8px 10px;text-align:center;vertical-align:top;width:34%;position:relative;height:140px;">
       <div style="font-weight:bold;font-size:12px;">For ACMA CETP CO-OP. SOCIETY LTD.</div>
-      <div style="margin-top:50px;">
-        <div style="border-top:1px solid #000;width:80%;margin:0 auto 4px auto;"></div>
-        <div style="font-size:11px;font-weight:bold;">Authorised Signature</div>
+      <div style="position:absolute;bottom:10px;right:15px;font-size:11px;font-weight:bold;text-align:right;">
+        Authorised Signature
       </div>
     </td>
   </tr>

@@ -69,6 +69,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
   const [waterConsumption, setWaterConsumption] = useState<string>('');
   const [rate, setRate] = useState<string>(activeSettings.defaultWaterRate.toString());
   const [extraCharges, setExtraCharges] = useState<string>('');
+  const [additionalCharges, setAdditionalCharges] = useState<string>('');
 
   // Other amounts
   const [previousOutstanding, setPreviousOutstanding] = useState<string>('');
@@ -92,6 +93,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
         setWaterConsumption(item.waterConsumption.toString());
         setRate(item.rate.toString());
         setExtraCharges(item.extraCharges.toString());
+        setAdditionalCharges(item.additionalCharges ? item.additionalCharges.toString() : '');
 
         const lines = item.description.split('\n');
         const firstLine = lines[0] || '';
@@ -115,6 +117,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       setWaterConsumption('');
       setRate(activeSettings.defaultWaterRate.toString());
       setExtraCharges('');
+      setAdditionalCharges('');
       setPreviousOutstanding('');
       setIfPaidAfterDate('');
       setPleasePayRs('');
@@ -170,8 +173,9 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
     const wc = parseFloat(waterConsumption) || 0;
     const r = parseFloat(rate) || 0;
     const ec = parseFloat(extraCharges) || 0;
+    const ac = parseFloat(additionalCharges) || 0;
     const baseWaterCharge = wc * r;
-    const amountBeforeTax = baseWaterCharge + ec;
+    const amountBeforeTax = baseWaterCharge + ec + ac;
     const cgstAmount = amountBeforeTax * cgstRate;
     const sgstAmount = amountBeforeTax * sgstRate;
     const totalTaxAmount = cgstAmount + sgstAmount;
@@ -189,7 +193,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       amountAfterTax,
       roundOff,
     };
-  }, [waterConsumption, rate, extraCharges, cgstRate, sgstRate]);
+  }, [waterConsumption, rate, extraCharges, additionalCharges, cgstRate, sgstRate]);
 
   const amountInWords = useMemo(() => {
     return numberToWords(calculations.amountAfterTax);
@@ -204,6 +208,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
     const wc = parseFloat(waterConsumption) || 0;
     const r = parseFloat(rate) || 0;
     const ec = parseFloat(extraCharges) || 0;
+    const ac = parseFloat(additionalCharges) || 0;
     const prevOutstanding = parseFloat(previousOutstanding) || 0;
     const payRs = parseFloat(pleasePayRs) || 0;
 
@@ -214,6 +219,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       waterConsumption: wc,
       rate: r,
       extraCharges: ec,
+      additionalCharges: ac,
       baseCharge: calculations.baseWaterCharge,
       taxableAmount: calculations.amountBeforeTax,
     };
@@ -227,6 +233,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
       totals: {
         baseCharge: calculations.baseWaterCharge,
         extraCharges: ec,
+        additionalCharges: ac,
         amountBeforeTax: calculations.amountBeforeTax,
         cgstAmount: calculations.cgstAmount,
         sgstAmount: calculations.sgstAmount,
@@ -272,6 +279,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
           `Water: ${waterConsumption} M³ × ₹${rate}/M³\n` +
           `Base Charge: ₹${calculations.baseWaterCharge.toFixed(2)}\n` +
           `Extra Charges: ₹${(parseFloat(extraCharges) || 0).toFixed(2)}\n` +
+          `Additional Charges: ₹${(parseFloat(additionalCharges) || 0).toFixed(2)}\n` +
           `Before Tax: ₹${calculations.amountBeforeTax.toFixed(2)}\n` +
           `CGST (2.5%): ₹${calculations.cgstAmount.toFixed(2)}\n` +
           `SGST (2.5%): ₹${calculations.sgstAmount.toFixed(2)}\n` +
@@ -441,17 +449,32 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                   />
                 </div>
 
-                <div className="relative mt-3">
-                  <textarea
-                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 pt-5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[56px] resize-none disabled:opacity-50 disabled:cursor-not-allowed"
-                    placeholder="Additional Descriptions"
-                    value={additionalDesc}
-                    onChange={(e) => setAdditionalDesc(e.target.value)}
+                <div className="grid grid-cols-4 gap-4 mt-3">
+                  <div className="col-span-3 relative">
+                    <Input
+                      label="Additional Charges (e.g. Sample Testing Charges)"
+                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 pt-5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-h-[48px] h-12 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+                      placeholder="Additional Charges"
+                      value={additionalDesc}
+                      onChange={(e) => setAdditionalDesc(e.target.value)}
+                      disabled={isSaved && !isEditing}
+                    />
+                    {/* <label className="absolute left-3 top-1 text-xs text-muted-foreground pointer-events-none">
+                      Additional Charges (e.g. Sample Testing Charges)
+                    </label> */}
+                  </div>
+                  <Input
+                    type="text"
+                    label={additionalDesc.trim() ? `${additionalDesc.trim()} (Rs.)` : "Additional Charges (Rs.)"}
+                    value={additionalCharges}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d*\.?\d*$/.test(val)) {
+                        setAdditionalCharges(val);
+                      }
+                    }}
                     disabled={isSaved && !isEditing}
                   />
-                  <label className="absolute left-3 top-1 text-xs text-muted-foreground pointer-events-none">
-                    Additional Descriptions (e.g. Sample Testing Charges)
-                  </label>
                 </div>
 
                 <div className="grid grid-cols-3 gap-4 mt-3">
@@ -491,6 +514,7 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                     }}
                     disabled={isSaved && !isEditing}
                   />
+                 
                 </div>
               </CardContent>
             </Card>
@@ -555,9 +579,15 @@ export function CreateInvoice({ initialInvoice }: { initialInvoice?: Invoice | n
                     <span className="text-slate-400">Base Water Charge</span>
                     <span className="tabular-nums">₹ {calculations.baseWaterCharge.toFixed(2)}</span>
                   </div>
+                  {parseFloat(additionalCharges) > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">{additionalDesc.trim() ? `${additionalDesc.trim()} (Rs.)` : "Additional Charges (Rs.)"}</span>
+                      <span className="tabular-nums">₹ {parseFloat(additionalCharges).toFixed(2)}</span>
+                    </div>
+                  )}
                   {parseFloat(extraCharges) > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Extra Charges</span>
+                      <span className="text-slate-400">Misc. Charges</span>
                       <span className="tabular-nums">₹ {parseFloat(extraCharges).toFixed(2)}</span>
                     </div>
                   )}
