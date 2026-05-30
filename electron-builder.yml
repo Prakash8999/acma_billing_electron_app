@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: com.biller.com
+appId: com.acma.billing
+productName: ACMA Billing App
 directories:
   buildResources: build
 files:
@@ -12,7 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: com.biller.com
+  executableName: com.acma.billing
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
